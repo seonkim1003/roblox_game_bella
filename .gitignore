@@ -1,0 +1,14 @@
+# Roblox build output
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+rojo-server*.log
+
+# Tooling
+.rokit/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
