@@ -129,6 +129,17 @@ local finaleState = {
 	difficulty = 0.5,
 	activeMinigame = nil,
 }
+local finaleFromLobby = ShowState.transition(initial, "StartFinale", nil)
+expectRejected(finaleFromLobby, initial, "finale cannot start from the lobby")
+local finaleDuringGame = ShowState.transition(launchCheese.state, "StartFinale", nil)
+expectRejected(finaleDuringGame, launchCheese.state, "finale cannot interrupt a minigame")
+local startFinale = ShowState.transition(startHub.state, "StartFinale", nil)
+expectEqual(startFinale.error, nil, "finale starts from the hub")
+expectEqual(startFinale.changed, true, "finale transition reports a change")
+expectEqual(startFinale.state.phase, "Finale", "finale transition enters finale")
+expectEqual(startFinale.state.activeMinigame, nil, "finale transition has no active game")
+local repeatedFinale = ShowState.transition(startFinale.state, "StartFinale", nil)
+expectRejected(repeatedFinale, startFinale.state, "finale cannot be started twice")
 local finaleDifficulty = ShowState.transition(finaleState :: any, "SetDifficulty", { level = 0.8 })
 expectRejected(finaleDifficulty, finaleState, "difficulty is locked in finale")
 local finaleLaunch = ShowState.transition(finaleState :: any, "LaunchMinigame", { id = "DogDash" })

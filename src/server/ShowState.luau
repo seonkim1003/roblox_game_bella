@@ -152,6 +152,15 @@ function ShowState.transition(
 		local nextState = cloneState(state)
 		nextState.difficulty = clamped
 		return accepted(nextState)
+	elseif action == "StartFinale" then
+		if state.phase ~= "Hub" then
+			return rejected(state, "The finale can only start from the hub")
+		end
+
+		local nextState = cloneState(state)
+		nextState.phase = "Finale"
+		nextState.activeMinigame = nil
+		return accepted(nextState)
 	end
 
 	return rejected(state, "Unknown state transition")

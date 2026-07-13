@@ -107,6 +107,24 @@ function DirectorController.start()
 					else "Your filtered message is now on Bella's screen.",
 				false
 			)
+		elseif event == "SurpriseTriggered" then
+			local kind = payload.kind
+			panel.setNotice(
+				if type(kind) == "string"
+					then `{kind} is live on Bella's screen.`
+					else "Surprise fired.",
+				false
+			)
+		elseif event == "FinaleStarted" then
+			panel.setPhase("Finale", nil)
+			panel.setNotice("Finale started. Let the moment breathe.", false)
+		elseif event == "FinaleBeat" then
+			local beat = payload.beat
+			if beat == "BroodingGuest" then
+				panel.setNotice("The brooding guest is stepping out of the shadows.", false)
+			elseif beat == "HappyBirthday" then
+				panel.setNotice("Happy Birthday, Bella. The show is complete.", false)
+			end
 		end
 	end)
 

@@ -24,12 +24,27 @@ local VALID_TRICKS: { [string]: boolean } = {
 	Cuddle = true,
 }
 
+local VALID_SURPRISES: { [string]: boolean } = {
+	Confetti = true,
+	Cake = true,
+	Balloons = true,
+	AsmrBurst = true,
+}
+
 local DOG_LIFETIME = 12
 
 local SurpriseService = {}
 
 local broadcast: Broadcast? = nil
 local activeDogs: Folder? = nil
+local activeSurprises: { Folder } = {}
+
+local SURPRISE_COLORS = {
+	Color3.fromRGB(255, 143, 196),
+	Color3.fromRGB(126, 200, 255),
+	Color3.fromRGB(255, 220, 130),
+	Color3.fromRGB(190, 135, 235),
+}
 
 local function makePart(
 	model: Model,
@@ -202,6 +217,192 @@ local function tweenRoot(root: BasePart, target: CFrame, duration: number): Twee
 	return tween
 end
 
+local function surprisePart(
+	parent: Instance,
+	name: string,
+	size: Vector3,
+	cf: CFrame,
+	color: Color3,
+	material: Enum.Material,
+	shape: Enum.PartType?
+): Part
+	local result = Instance.new("Part")
+	result.Name = name
+	result.Anchored = true
+	result.CanCollide = false
+	result.CanQuery = false
+	result.CanTouch = false
+	result.CastShadow = true
+	result.Color = color
+	result.Material = material
+	result.Shape = shape or Enum.PartType.Block
+	result.Size = size
+	result.CFrame = cf
+	result.TopSurface = Enum.SurfaceType.Smooth
+	result.BottomSurface = Enum.SurfaceType.Smooth
+	result.Parent = parent
+	return result
+end
+
+local function createSurpriseFolder(kind: string): Folder
+	local folder = Instance.new("Folder")
+	folder.Name = `BirthdaySurprise_{kind}`
+	folder.Parent = Workspace
+	table.insert(activeSurprises, folder)
+	Debris:AddItem(folder, 12)
+	task.delay(12, function()
+		local index = table.find(activeSurprises, folder)
+		if index then
+			table.remove(activeSurprises, index)
+		end
+	end)
+	return folder
+end
+
+local function confettiSurprise(at: CFrame)
+	local folder = createSurpriseFolder("Confetti")
+	local emitterPart = surprisePart(
+		folder,
+		"ConfettiEmitter",
+		Vector3.new(1, 1, 1),
+		at * CFrame.new(0, 8, 0),
+		Color3.new(1, 1, 1),
+		Enum.Material.SmoothPlastic,
+		nil
+	)
+	emitterPart.Transparency = 1
+
+	local emitter = Instance.new("ParticleEmitter")
+	emitter.Name = "BirthdayConfetti"
+	emitter.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, SURPRISE_COLORS[1]),
+		ColorSequenceKeypoint.new(0.33, SURPRISE_COLORS[2]),
+		ColorSequenceKeypoint.new(0.66, SURPRISE_COLORS[3]),
+		ColorSequenceKeypoint.new(1, SURPRISE_COLORS[4]),
+	})
+	emitter.Drag = 1.5
+	emitter.EmissionDirection = Enum.NormalId.Bottom
+	emitter.Lifetime = NumberRange.new(2.5, 4)
+	emitter.LightEmission = 0.25
+	emitter.Rate = 0
+	emitter.Rotation = NumberRange.new(0, 360)
+	emitter.RotSpeed = NumberRange.new(-240, 240)
+	emitter.Size = NumberSequence.new(0.28)
+	emitter.Speed = NumberRange.new(7, 13)
+	emitter.SpreadAngle = Vector2.new(55, 55)
+	emitter.Parent = emitterPart
+	emitter:Emit(140)
+end
+
+local function cakeSurprise(at: CFrame)
+	local folder = createSurpriseFolder("Cake")
+	local baseAt = at * CFrame.new(0, -2.3, -5)
+	surprisePart(
+		folder,
+		"CakePlate",
+		Vector3.new(0.3, 6, 6),
+		baseAt * CFrame.Angles(0, 0, math.rad(90)),
+		Color3.fromRGB(240, 229, 246),
+		Enum.Material.SmoothPlastic,
+		Enum.PartType.Cylinder
+	)
+	for layer = 1, 3 do
+		local radius = 5.2 - (layer - 1) * 0.8
+		surprisePart(
+			folder,
+			`CakeLayer{layer}`,
+			Vector3.new(1.25, radius, radius),
+			baseAt * CFrame.new(0, 0.55 + (layer - 1) * 1.15, 0) * CFrame.Angles(0, 0, math.rad(90)),
+			if layer % 2 == 0 then SURPRISE_COLORS[1] else Color3.fromRGB(255, 235, 218),
+			Enum.Material.SmoothPlastic,
+			Enum.PartType.Cylinder
+		)
+	end
+	for candle = -2, 2 do
+		local stem = surprisePart(
+			folder,
+			`Candle{candle + 3}`,
+			Vector3.new(0.18, 1, 0.18),
+			baseAt * CFrame.new(candle * 0.55, 4, 0),
+			SURPRISE_COLORS[(candle + 5) % #SURPRISE_COLORS + 1],
+			Enum.Material.SmoothPlastic,
+			nil
+		)
+		local flame = surprisePart(
+			folder,
+			`Flame{candle + 3}`,
+			Vector3.new(0.3, 0.45, 0.3),
+			stem.CFrame * CFrame.new(0, 0.7, 0),
+			Color3.fromRGB(255, 199, 82),
+			Enum.Material.Neon,
+			Enum.PartType.Ball
+		)
+		local light = Instance.new("PointLight")
+		light.Brightness = 1.5
+		light.Color = flame.Color
+		light.Range = 7
+		light.Parent = flame
+	end
+end
+
+local function balloonSurprise(at: CFrame)
+	local folder = createSurpriseFolder("Balloons")
+	for index = 1, 10 do
+		local angle = (index / 10) * math.pi * 2
+		local radius = 4 + (index % 3)
+		local position = at.Position
+			+ Vector3.new(
+				math.cos(angle) * radius,
+				3.5 + (index % 4) * 1.15,
+				math.sin(angle) * radius
+			)
+		local balloon = surprisePart(
+			folder,
+			`Balloon{index}`,
+			Vector3.new(1.25, 1.55, 1.25),
+			CFrame.new(position),
+			SURPRISE_COLORS[(index - 1) % #SURPRISE_COLORS + 1],
+			Enum.Material.SmoothPlastic,
+			Enum.PartType.Ball
+		)
+		local target = balloon.CFrame * CFrame.new(0, 0.45 + (index % 2) * 0.35, 0)
+		TweenService:Create(
+			balloon,
+			TweenInfo.new(
+				1.5 + (index % 3) * 0.2,
+				Enum.EasingStyle.Sine,
+				Enum.EasingDirection.InOut,
+				-1,
+				true
+			),
+			{ CFrame = target }
+		):Play()
+	end
+end
+
+local function asmrBurstSurprise(at: CFrame)
+	local folder = createSurpriseFolder("AsmrBurst")
+	for index = 1, 4 do
+		local orb = surprisePart(
+			folder,
+			`SatisfyingOrb{index}`,
+			Vector3.new(0.8, 0.8, 0.8),
+			at * CFrame.new(0, 1.5, -2),
+			SURPRISE_COLORS[index],
+			Enum.Material.Neon,
+			Enum.PartType.Ball
+		)
+		orb.Transparency = 0.15
+		local angle = (index / 4) * math.pi * 2
+		local target = at * CFrame.new(math.cos(angle) * 5, 2.5 + index * 0.35, math.sin(angle) * 5)
+		TweenService:Create(
+			orb,
+			TweenInfo.new(1.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+			{ CFrame = target, Size = Vector3.new(2.1, 2.1, 2.1), Transparency = 0.8 }
+		):Play()
+	end
+end
+
 local function animateTrick(root: BasePart, target: CFrame, trick: string, side: number)
 	if trick == "TrotIn" then
 		tweenRoot(root, target, 1.8)
@@ -231,6 +432,40 @@ end
 
 function SurpriseService.isValidTrick(trick: string): boolean
 	return VALID_TRICKS[trick] == true
+end
+
+function SurpriseService.isValidSurprise(kind: string): boolean
+	return VALID_SURPRISES[kind] == true
+end
+
+function SurpriseService.triggerSurprise(star: Player?, kind: string): (boolean, string?)
+	if not VALID_SURPRISES[kind] then
+		return false, "Choose Confetti, Cake, Balloons, or ASMR Burst"
+	end
+	if not star then
+		return false, "Bella is not connected"
+	end
+
+	local character = star.Character
+	local humanoidRoot = if character then character:FindFirstChild("HumanoidRootPart") else nil
+	if not humanoidRoot or not humanoidRoot:IsA("BasePart") then
+		return false, "Bella's character is not ready"
+	end
+
+	if kind == "Confetti" then
+		confettiSurprise(humanoidRoot.CFrame)
+	elseif kind == "Cake" then
+		cakeSurprise(humanoidRoot.CFrame)
+	elseif kind == "Balloons" then
+		balloonSurprise(humanoidRoot.CFrame)
+	else
+		asmrBurstSurprise(humanoidRoot.CFrame)
+	end
+
+	if broadcast then
+		broadcast("SurpriseTriggered", { kind = kind })
+	end
+	return true, nil
 end
 
 function SurpriseService.summonDogs(star: Player?, trick: string): (boolean, string?)
