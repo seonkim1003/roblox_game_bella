@@ -5,10 +5,12 @@
 -- frozen MinigameServer interface.
 
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Net = require(Shared.Net)
+local ContractValidation = require(Shared.ContractValidation)
 local ShowConstants = require(Shared.ShowConstants)
 local Types = require(Shared.Types)
 
@@ -17,6 +19,7 @@ local FinaleService = require(script.Parent.FinaleService)
 local ShowState = require(script.Parent.ShowState)
 local SurpriseService = require(script.Parent.SurpriseService)
 local HubBuilder = require(script.Parent.world.HubBuilder)
+local TokenBucket = require(script.Parent.TokenBucket)
 
 type Payload = { [string]: any }
 
@@ -24,6 +27,7 @@ local MAX_MESSAGE_CHARACTERS = 160
 local MAX_MESSAGE_BYTES = 600
 local MAX_SCORE = 1_000_000_000
 local MAX_PROGRESS_FIELDS = 12
+local RECONNECT_GRACE_SECONDS = 20
 
 local ACTION_INTERVALS: { [string]: number } = {
 	DirectorIngress = 0.01,
@@ -36,15 +40,22 @@ local ACTION_INTERVALS: { [string]: number } = {
 	Surprise = 0.5,
 	StartFinale = 2,
 	MinigameScore = 0.04,
+	RoundInput = 0.02,
+	Telemetry = 0.2,
+	RoundReady = 0.5,
 }
 
 local ShowDirectorService = {}
 
 local state: ShowState.State = ShowState.new(ShowConstants.DefaultDifficulty)
+local sessionId = HttpService:GenerateGUID(false)
 local minigames: { [string]: Types.MinigameServer } = {}
 local activeMinigame: Types.MinigameServer? = nil
+local activeRoundConfig: Types.RoundConfig? = nil
 local activeRunToken = 0
-local lastRequestAt: { [Player]: { [string]: number } } = {}
+local requestBuckets: { [Player]: { [string]: TokenBucket.Bucket } } = {}
+local lastInputSequence: { [Player]: number } = {}
+local abandonToken = 0
 local started = false
 
 local function sendEvent(player: Player, event: string, payload: Payload?)
@@ -88,6 +99,8 @@ local function statePayload(reason: string): Payload
 		phase = state.phase,
 		difficulty = state.difficulty,
 		activeMinigame = state.activeMinigame,
+		sessionId = sessionId,
+		roundConfig = activeRoundConfig,
 		starConnected = star ~= nil,
 		starName = if star then star.DisplayName else nil,
 		directorConnected = director ~= nil,
@@ -127,24 +140,23 @@ end
 local function consumeRateLimit(player: Player, key: string): boolean
 	local now = os.clock()
 	local interval = ACTION_INTERVALS[key] or 0.5
-	local playerRequests = lastRequestAt[player]
-	if not playerRequests then
-		playerRequests = {}
-		lastRequestAt[player] = playerRequests
+	local playerBuckets = requestBuckets[player]
+	if not playerBuckets then
+		playerBuckets = {}
+		requestBuckets[player] = playerBuckets
 	end
 
-	local previous = playerRequests[key]
-	if previous and now - previous < interval then
-		return false
-	end
-	playerRequests[key] = now
-	return true
+	local accepted, bucket = TokenBucket.consume(playerBuckets[key], now, 2, 1 / interval)
+	playerBuckets[key] = bucket
+	return accepted
 end
 
 local function stopActiveMinigame()
 	local minigame = activeMinigame
 	activeRunToken += 1
 	activeMinigame = nil
+	activeRoundConfig = nil
+	table.clear(lastInputSequence)
 	if not minigame then
 		return
 	end
@@ -157,13 +169,33 @@ local function stopActiveMinigame()
 	end
 end
 
-local function buildContext(minigame: Types.MinigameServer, runToken: number): Types.ShowContext
+local function buildContext(
+	minigame: Types.MinigameServer,
+	runToken: number,
+	roundConfig: Types.RoundConfig
+): Types.ShowContext
 	return {
 		star = RoleService.getStar(),
+		roundConfig = roundConfig,
 		difficulty = function()
 			return state.difficulty
 		end,
 		broadcast = broadcast,
+		publishTelemetry = function(sample: Types.TelemetrySample)
+			if activeRunToken ~= runToken or sample.roundId ~= roundConfig.roundId then
+				return
+			end
+			local director = RoleService.getDirector()
+			if director then
+				sendEvent(director, "TelemetrySample", sample :: any)
+			end
+		end,
+		recordMoment = function(moment: Types.SignificantGameplayMoment)
+			if activeRunToken ~= runToken or moment.roundId ~= roundConfig.roundId then
+				return
+			end
+			broadcast("SignificantMoment", moment :: any)
+		end,
 		complete = function(result: Payload?)
 			if activeMinigame ~= minigame or activeRunToken ~= runToken then
 				return
@@ -177,7 +209,11 @@ local function buildContext(minigame: Types.MinigameServer, runToken: number): T
 				return
 			end
 			state = transition.state
-			broadcast("MinigameComplete", { id = completedId, result = result })
+			broadcast("MinigameComplete", {
+				id = completedId,
+				roundId = roundConfig.roundId,
+				result = result,
+			})
 			broadcast("PhaseChanged", { phase = state.phase })
 			publishState("MinigameComplete")
 		end,
@@ -247,17 +283,28 @@ local function launchMinigame(player: Player, id: string)
 	activeMinigame = minigame
 	activeRunToken += 1
 	local runToken = activeRunToken
+	local roundConfig: Types.RoundConfig = {
+		sessionId = sessionId,
+		roundId = HttpService:GenerateGUID(false),
+		gameId = id :: Types.MinigameId,
+		seed = Random.new():NextInteger(1, 2_147_483_647),
+		difficulty = state.difficulty,
+		modifiers = {},
+	}
+	activeRoundConfig = roundConfig
+	table.clear(lastInputSequence)
 
 	broadcast("PhaseChanged", { phase = state.phase })
 	broadcast("MinigameStarted", {
 		id = id,
 		difficulty = state.difficulty,
 		runId = runToken,
+		roundConfig = roundConfig,
 	})
 	publishState("MinigameStarted")
 
 	local success, startError = pcall(function()
-		minigame:start(buildContext(minigame, runToken))
+		minigame:start(buildContext(minigame, runToken, roundConfig))
 	end)
 	if not success then
 		warn(`[Bash] Failed to start {id}: {startError}`)
@@ -303,6 +350,11 @@ local function handleCommand(player: Player, command: any)
 		return
 	end
 	if RoleService.roleOf(player) ~= "Director" then
+		return
+	end
+	local bounded = ContractValidation.isBoundedPayload(command)
+	if not bounded then
+		reject(player, "Unknown", "Malformed command")
 		return
 	end
 	if type(command) ~= "table" or type(command.action) ~= "string" then
@@ -531,6 +583,74 @@ local function handleScore(player: Player, report: any)
 	end
 end
 
+local function handleRoundIngress(player: Player, envelope: any)
+	if type(envelope) ~= "table" or type(envelope.kind) ~= "string" then
+		-- Compatibility only: legacy score reports are presentation telemetry and
+		-- can never complete a round or grant an authoritative result.
+		handleScore(player, envelope)
+		return
+	end
+	if RoleService.roleOf(player) ~= "Star" then
+		return
+	end
+
+	local roundConfig = activeRoundConfig
+	if state.phase ~= "Minigame" or not activeMinigame or not roundConfig then
+		return
+	end
+	local bounded = ContractValidation.isBoundedPayload(envelope)
+	if not bounded then
+		return
+	end
+
+	if envelope.kind == "Input" then
+		if not consumeRateLimit(player, "RoundInput") then
+			return
+		end
+		local input = envelope.payload
+		local previousSequence = lastInputSequence[player] or 0
+		local valid = ContractValidation.validateRoundInput(
+			input,
+			roundConfig.roundId,
+			previousSequence,
+			workspace:GetServerTimeNow(),
+			roundConfig.gameId
+		)
+		if not valid then
+			return
+		end
+		lastInputSequence[player] = input.sequence
+		local handler = activeMinigame.handleInput
+		if handler then
+			handler(activeMinigame, player, input :: Types.RoundInput)
+		end
+	elseif envelope.kind == "Telemetry" then
+		if not consumeRateLimit(player, "Telemetry") then
+			return
+		end
+		local sample = envelope.payload
+		local valid = ContractValidation.validateTelemetry(sample, roundConfig.roundId)
+		if not valid then
+			return
+		end
+		local director = RoleService.getDirector()
+		if director then
+			sendEvent(director, "TelemetrySample", sample)
+		end
+	elseif envelope.kind == "Ready" then
+		if not consumeRateLimit(player, "RoundReady") then
+			return
+		end
+		local payload = envelope.payload
+		if type(payload) == "table" and payload.roundId == roundConfig.roundId then
+			sendEvent(player, "RoundSnapshot", {
+				roundConfig = roundConfig,
+				lastAcceptedSequence = lastInputSequence[player] or 0,
+			})
+		end
+	end
+end
+
 function ShowDirectorService.start()
 	if started then
 		return
@@ -543,17 +663,41 @@ function ShowDirectorService.start()
 	FinaleService.start(broadcast)
 	RoleService.onRolesChanged(function()
 		if state.phase == "Minigame" and not RoleService.getStar() then
-			local interruptedId = state.activeMinigame
-			stopActiveMinigame()
-			local transition = ShowState.transition(state, "EndMinigame", nil)
-			if not transition.error then
-				state = transition.state
-				broadcast("MinigameEnded", {
-					id = interruptedId,
-					reason = "StarDisconnected",
-				})
-				broadcast("PhaseChanged", { phase = state.phase })
-			end
+			abandonToken += 1
+			local pendingToken = abandonToken
+			local pendingRunToken = activeRunToken
+			broadcast("RoundConnectionChanged", {
+				status = "Reconnecting",
+				graceSeconds = RECONNECT_GRACE_SECONDS,
+			})
+			task.delay(RECONNECT_GRACE_SECONDS, function()
+				if
+					pendingToken ~= abandonToken
+					or pendingRunToken ~= activeRunToken
+					or RoleService.getStar() ~= nil
+				then
+					return
+				end
+				local interruptedId = state.activeMinigame
+				local interruptedRoundId = if activeRoundConfig
+					then activeRoundConfig.roundId
+					else nil
+				stopActiveMinigame()
+				local transition = ShowState.transition(state, "EndMinigame", nil)
+				if not transition.error then
+					state = transition.state
+					broadcast("MinigameEnded", {
+						id = interruptedId,
+						roundId = interruptedRoundId,
+						reason = "RoundAbandoned",
+					})
+					broadcast("PhaseChanged", { phase = state.phase })
+					publishState("RoundAbandoned")
+				end
+			end)
+		elseif state.phase == "Minigame" and RoleService.getStar() then
+			abandonToken += 1
+			broadcast("RoundConnectionChanged", { status = "Connected" })
 		end
 		publishState("RolesChanged")
 		-- Role_Assigned is retried at 0/1/3 seconds by the frozen M0 role
@@ -567,9 +711,10 @@ function ShowDirectorService.start()
 	end)
 
 	Net.get(Net.DirectorCommand).OnServerEvent:Connect(handleCommand)
-	Net.get(Net.MinigameScore).OnServerEvent:Connect(handleScore)
+	Net.get(Net.MinigameScore).OnServerEvent:Connect(handleRoundIngress)
 	Players.PlayerRemoving:Connect(function(player: Player)
-		lastRequestAt[player] = nil
+		requestBuckets[player] = nil
+		lastInputSequence[player] = nil
 	end)
 
 	-- Best-effort snapshots for the frozen M0 one-way role/event contract. The
