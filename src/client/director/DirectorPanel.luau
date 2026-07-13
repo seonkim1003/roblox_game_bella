@@ -361,8 +361,7 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 		createButton(gameGrid, "Gigi & Rambo\nDash", Color3.fromRGB(126, 173, 238))
 	launchButtons.SatisfyStation =
 		createButton(gameGrid, "ASMR Satisfy\nStation", Color3.fromRGB(177, 123, 214))
-	local futureButton = createButton(gameGrid, "Finale unlocks\nin Milestone 2", COLORS.cardRaised)
-	setButtonEnabled(futureButton, false)
+	local finaleButton = createButton(gameGrid, "Start Grand\nFinale", Color3.fromRGB(99, 88, 145))
 
 	local difficultyCard = createCard(leftColumn, "Difficulty", 207)
 	createLabel(
@@ -539,6 +538,47 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 		button.Size = UDim2.new(0.333, -6, 0, 50)
 	end
 
+	local surpriseCard = createCard(rightColumn, "Surprises", 175)
+	createLabel(
+		surpriseCard,
+		"SURPRISE BELLA",
+		UDim2.new(1, -36, 0, 28),
+		UDim2.fromOffset(18, 15),
+		Enum.Font.GothamBlack,
+		17,
+		COLORS.accent
+	)
+	createLabel(
+		surpriseCard,
+		"Fire a quick celebratory cue during the hub or a game.",
+		UDim2.new(1, -36, 0, 36),
+		UDim2.fromOffset(18, 43),
+		Enum.Font.Gotham,
+		12,
+		COLORS.muted
+	)
+
+	local surpriseButtonsFrame = Instance.new("Frame")
+	surpriseButtonsFrame.BackgroundTransparency = 1
+	surpriseButtonsFrame.Position = UDim2.fromOffset(18, 91)
+	surpriseButtonsFrame.Size = UDim2.new(1, -36, 0, 58)
+	surpriseButtonsFrame.Parent = surpriseCard
+	local surpriseGrid = Instance.new("UIGridLayout")
+	surpriseGrid.CellPadding = UDim2.fromOffset(8, 8)
+	surpriseGrid.CellSize = UDim2.new(0.5, -4, 0, 25)
+	surpriseGrid.FillDirectionMaxCells = 2
+	surpriseGrid.SortOrder = Enum.SortOrder.LayoutOrder
+	surpriseGrid.Parent = surpriseButtonsFrame
+	local surpriseButtons: { [string]: TextButton } = {
+		Confetti = createButton(surpriseButtonsFrame, "Confetti", COLORS.primary),
+		Cake = createButton(surpriseButtonsFrame, "Cake", Color3.fromRGB(221, 151, 105)),
+		Balloons = createButton(surpriseButtonsFrame, "Balloons", COLORS.accent),
+		AsmrBurst = createButton(surpriseButtonsFrame, "ASMR Burst", Color3.fromRGB(177, 123, 214)),
+	}
+	for _, button in surpriseButtons do
+		button.TextSize = 12
+	end
+
 	local messageCard = createCard(rightColumn, "Message", 228)
 	createLabel(
 		messageCard,
@@ -619,6 +659,7 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 			launchButtons.CheeseTower,
 			launchButtons.DogDash,
 			launchButtons.SatisfyStation,
+			finaleButton,
 			endButton,
 			minusButton,
 			plusButton,
@@ -655,6 +696,7 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 		local livePhase = currentPhase == "Hub" or currentPhase == "Minigame"
 		setButtonEnabled(startHubButton, currentPhase == "Lobby")
 		setButtonEnabled(endButton, currentPhase == "Minigame")
+		setButtonEnabled(finaleButton, currentPhase == "Hub" and starConnected)
 		setButtonEnabled(minusButton, currentPhase ~= "Finale")
 		setButtonEnabled(plusButton, currentPhase ~= "Finale")
 
@@ -666,6 +708,9 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 			setButtonEnabled(button, enabled)
 		end
 		for _, button in dogButtons do
+			setButtonEnabled(button, livePhase and starConnected)
+		end
+		for _, button in surpriseButtons do
 			setButtonEnabled(button, livePhase and starConnected)
 		end
 		setButtonEnabled(sendButton, livePhase and starConnected and messageBox.Text ~= "")
@@ -745,6 +790,9 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 	trove:Add(endButton.Activated:Connect(function()
 		sendCommand("EndMinigame", nil)
 	end))
+	trove:Add(finaleButton.Activated:Connect(function()
+		sendCommand("StartFinale", nil)
+	end))
 	for id, button in launchButtons do
 		trove:Add(button.Activated:Connect(function()
 			sendCommand("LaunchMinigame", { id = id })
@@ -753,6 +801,11 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 	for trick, button in dogButtons do
 		trove:Add(button.Activated:Connect(function()
 			sendCommand("SummonDogs", { trick = trick })
+		end))
+	end
+	for kind, button in surpriseButtons do
+		trove:Add(button.Activated:Connect(function()
+			sendCommand("Surprise", { kind = kind })
 		end))
 	end
 	trove:Add(minusButton.Activated:Connect(function()
@@ -830,14 +883,14 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 			leftColumn.Position = UDim2.fromOffset(0, 0)
 			leftColumn.Size = UDim2.new(1, -8, 0, 615)
 			rightColumn.Position = UDim2.fromOffset(0, 631)
-			rightColumn.Size = UDim2.new(1, -8, 0, 625)
-			content.CanvasSize = UDim2.fromOffset(0, 1272)
+			rightColumn.Size = UDim2.new(1, -8, 0, 816)
+			content.CanvasSize = UDim2.fromOffset(0, 1463)
 		else
 			leftColumn.Position = UDim2.fromOffset(0, 0)
-			leftColumn.Size = UDim2.new(0.56, -10, 0, 625)
+			leftColumn.Size = UDim2.new(0.56, -10, 0, 816)
 			rightColumn.Position = UDim2.new(0.56, 10, 0, 0)
-			rightColumn.Size = UDim2.new(0.44, -10, 0, 625)
-			content.CanvasSize = UDim2.fromOffset(0, 640)
+			rightColumn.Size = UDim2.new(0.44, -10, 0, 816)
+			content.CanvasSize = UDim2.fromOffset(0, 832)
 		end
 	end
 	trove:Add(content:GetPropertyChangedSignal("AbsoluteSize"):Connect(applyResponsiveLayout))
@@ -927,6 +980,10 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 				showNotice("The party hub is live.", false)
 			elseif action == "EndMinigame" then
 				showNotice("The minigame ended cleanly.", false)
+			elseif action == "Surprise" then
+				showNotice(`Surprise fired: {detail or "cue received"}.`, false)
+			elseif action == "StartFinale" then
+				showNotice("The grand finale is underway.", false)
 			end
 		else
 			if action == "SetDifficulty" then

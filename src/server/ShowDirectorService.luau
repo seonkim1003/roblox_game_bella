@@ -13,8 +13,10 @@ local ShowConstants = require(Shared.ShowConstants)
 local Types = require(Shared.Types)
 
 local RoleService = require(script.Parent.RoleService)
+local FinaleService = require(script.Parent.FinaleService)
 local ShowState = require(script.Parent.ShowState)
 local SurpriseService = require(script.Parent.SurpriseService)
+local HubBuilder = require(script.Parent.world.HubBuilder)
 
 type Payload = { [string]: any }
 
@@ -32,7 +34,7 @@ local ACTION_INTERVALS: { [string]: number } = {
 	SummonDogs = 1.5,
 	SendMessage = 1.5,
 	Surprise = 0.5,
-	StartFinale = 0.5,
+	StartFinale = 2,
 	MinigameScore = 0.04,
 }
 
@@ -405,8 +407,60 @@ local function handleCommand(player: Player, command: any)
 			return
 		end
 		accept(player, action, if isStudioPreview then "StudioPreview" else nil)
-	elseif action == "Surprise" or action == "StartFinale" then
-		reject(player, action, "That control arrives in Milestone 2")
+	elseif action == "Surprise" then
+		if not ShowState.canUseLiveEffect(state) then
+			reject(player, action, "Start the hub before triggering a surprise")
+			return
+		end
+		local kind = if payload then payload.kind else nil
+		if type(kind) ~= "string" or not SurpriseService.isValidSurprise(kind) then
+			reject(player, action, "Choose Confetti, Cake, Balloons, or ASMR Burst")
+			return
+		end
+		local success, reason = SurpriseService.triggerSurprise(RoleService.getStar(), kind)
+		if not success then
+			reject(player, action, reason or "That surprise could not start")
+			return
+		end
+		accept(player, action, kind)
+	elseif action == "StartFinale" then
+		local star = RoleService.getStar()
+		if not star then
+			reject(player, action, "Bella is not connected")
+			return
+		end
+		local transition = ShowState.transition(state, action, payload)
+		if transition.error then
+			reject(player, action, transition.error)
+			return
+		end
+
+		local previousState = state
+		state = transition.state
+		local success, finaleStarted, reason = pcall(function()
+			local didBegin, finaleReason = FinaleService.begin(star)
+			return didBegin, finaleReason
+		end)
+		if not success or not finaleStarted then
+			state = previousState
+			FinaleService.cancel()
+			warn(
+				`[Bash] Failed to start finale: {tostring(if success then reason else finaleStarted)}`
+			)
+			publishState("FinaleFailed")
+			reject(
+				player,
+				action,
+				if success and type(reason) == "string"
+					then reason
+					else "The finale could not start"
+			)
+			return
+		end
+
+		broadcast("PhaseChanged", { phase = state.phase })
+		publishState("StartFinale")
+		accept(player, action)
 	end
 end
 
@@ -484,7 +538,9 @@ function ShowDirectorService.start()
 	started = true
 
 	loadMinigames()
+	HubBuilder.start()
 	SurpriseService.start(broadcast)
+	FinaleService.start(broadcast)
 	RoleService.onRolesChanged(function()
 		if state.phase == "Minigame" and not RoleService.getStar() then
 			local interruptedId = state.activeMinigame
