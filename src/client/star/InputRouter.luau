@@ -4,13 +4,15 @@
 
 local UserInputService = game:GetService("UserInputService")
 
-export type ActionName = "Drop" | "Left" | "Right" | "Primary"
+export type ActionName = "Drop" | "Left" | "Right" | "Primary" | "Slice"
 
 export type InputRouterApi = {
 	start: (self: InputRouterApi) -> (),
 	stop: (self: InputRouterApi) -> (),
 	on: (self: InputRouterApi, action: ActionName, callback: () -> ()) -> () -> (),
 	setEnabled: (self: InputRouterApi, enabled: boolean) -> (),
+	-- Latest pointer position in screen pixels (mouse or primary touch), if any.
+	getPointer: (self: InputRouterApi) -> Vector2?,
 }
 
 local InputRouter = {}
@@ -44,6 +46,9 @@ function InputRouter.new(): InputRouterApi
 		_listeners = {} :: { [ActionName]: { () -> () } },
 		_lastFire = {} :: { [ActionName]: number },
 		_connections = {} :: { RBXScriptConnection },
+		_pointer = nil :: Vector2?,
+		_dragOrigin = nil :: Vector2?,
+		_dragPointerType = nil :: Enum.UserInputType?,
 	}, InputRouter)
 	return (self :: any) :: InputRouterApi
 end
@@ -55,6 +60,8 @@ function InputRouter.start(self: any)
 	self._started = true
 	self._enabled = true
 
+	local SLICE_THRESHOLD = 52
+
 	table.insert(
 		self._connections,
 		UserInputService.InputBegan:Connect(function(input: InputObject, gameProcessed: boolean)
@@ -63,6 +70,9 @@ function InputRouter.start(self: any)
 			end
 
 			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				self._pointer = Vector2.new(input.Position.X, input.Position.Y)
+				self._dragOrigin = self._pointer
+				self._dragPointerType = input.UserInputType
 				local drop: ActionName = "Drop"
 				local primary: ActionName = "Primary"
 				fire(self, drop)
@@ -71,6 +81,9 @@ function InputRouter.start(self: any)
 			end
 
 			if input.UserInputType == Enum.UserInputType.Touch then
+				self._pointer = Vector2.new(input.Position.X, input.Position.Y)
+				self._dragOrigin = self._pointer
+				self._dragPointerType = input.UserInputType
 				-- TouchBegan fires per finger; treat as Drop/Primary.
 				local drop: ActionName = "Drop"
 				local primary: ActionName = "Primary"
@@ -101,6 +114,54 @@ function InputRouter.start(self: any)
 			then
 				local right: ActionName = "Right"
 				fire(self, right)
+			elseif keyCode == Enum.KeyCode.ButtonX or keyCode == Enum.KeyCode.ButtonB then
+				-- Controller "slice" affordance for Satisfy Station.
+				local slice: ActionName = "Slice"
+				fire(self, slice)
+			end
+		end)
+	)
+
+	table.insert(
+		self._connections,
+		UserInputService.InputChanged:Connect(function(input: InputObject, _gp: boolean)
+			if not self._enabled then
+				return
+			end
+			if
+				input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch
+			then
+				self._pointer = Vector2.new(input.Position.X, input.Position.Y)
+			end
+		end)
+	)
+
+	table.insert(
+		self._connections,
+		UserInputService.InputEnded:Connect(function(input: InputObject, _gp: boolean)
+			if not self._enabled then
+				return
+			end
+			if
+				input.UserInputType ~= Enum.UserInputType.MouseButton1
+				and input.UserInputType ~= Enum.UserInputType.Touch
+			then
+				return
+			end
+			local origin = self._dragOrigin
+			local pointerType = self._dragPointerType
+			self._dragOrigin = nil
+			self._dragPointerType = nil
+			if not origin or pointerType ~= input.UserInputType then
+				return
+			end
+			local ended = Vector2.new(input.Position.X, input.Position.Y)
+			self._pointer = ended
+			local delta = ended - origin
+			if delta.Magnitude >= SLICE_THRESHOLD then
+				local slice: ActionName = "Slice"
+				fire(self, slice)
 			end
 		end)
 	)
@@ -146,8 +207,15 @@ function InputRouter.stop(self: any)
 	table.clear(self._connections)
 	table.clear(self._listeners)
 	table.clear(self._lastFire)
+	self._pointer = nil
+	self._dragOrigin = nil
+	self._dragPointerType = nil
 	self._started = false
 	self._enabled = false
+end
+
+function InputRouter.getPointer(self: any): Vector2?
+	return self._pointer
 end
 
 function InputRouter.on(self: any, action: ActionName, callback: () -> ()): () -> ()
