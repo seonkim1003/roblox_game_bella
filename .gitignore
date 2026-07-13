@@ -7,8 +7,12 @@ rojo-server*.log
 
 # Tooling
 .rokit/
+/Packages/
+/ServerPackages/
+/DevPackages/
+/artifacts/
+sourcemap.json
 
 # OS/editor noise
 .DS_Store
 Thumbs.db
-.vscode/

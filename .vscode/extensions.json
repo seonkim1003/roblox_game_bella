@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "EditorConfig.EditorConfig",
+    "evaera.vscode-rojo",
+    "GitHub.vscode-pull-request-github",
+    "JohnnyMorganz.luau-lsp",
+    "JohnnyMorganz.stylua",
+    "Kampfkarren.selene-vscode"
+  ]
+}

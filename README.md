@@ -1,6 +1,6 @@
 # roblox_game
 
-Rojo project for Roblox Studio.
+AI-directed Roblox birthday game built with strict Luau, Rojo, and automated validation.
 
 ## First-time setup
 
@@ -9,6 +9,14 @@ Install tools from `rokit.toml`:
 ```powershell
 rokit install
 ```
+
+Install locked packages and validate the complete project:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/validate.ps1
+```
+
+The playable output is written to `artifacts/roblox_game.rbxl`.
 
 Install the Rojo Studio plugin:
 
@@ -24,6 +32,8 @@ rojo serve default.project.json
 
 Then open Roblox Studio, use the Rojo plugin, and connect to the local server.
 
+For AI feature prompts and playtest feedback, see `docs/AI_WORKFLOW.md`. All coding agents must follow `AGENTS.md`.
+
 ## Folders
 
 - `src/client`: LocalScripts under `StarterPlayerScripts`
@@ -31,3 +41,6 @@ Then open Roblox Studio, use the Rojo plugin, and connect to the local server.
 - `src/shared`: Modules under `ReplicatedStorage.Shared`
 - `src/ReplicatedStorage`: other replicated instances
 - `src/workspace`: Workspace instances
+- `tests`: pure Luau tests run through Lune
+- `art/source`: editable art and audio masters tracked with Git LFS
+- `art/export`: reviewed files ready for Roblox import
