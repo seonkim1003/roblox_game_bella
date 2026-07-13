@@ -159,6 +159,29 @@ local function stopActive()
 	hud:setGameplayVisible(false)
 end
 
+local function startFinalePresenter(payload: { [string]: any }?)
+	stopActive()
+	if finaleActive then
+		return
+	end
+	finaleActive = true
+	hud:setGameplayVisible(false)
+	if finalePresenter then
+		local messageLines = if payload and type(payload.messageLines) == "table"
+			then payload.messageLines
+			else {}
+		pcall(function()
+			finalePresenter:start({
+				messageLines = messageLines,
+				payload = payload,
+			})
+		end)
+	else
+		hud:showMessage("Finale…")
+		SoundKit.play("softChime")
+	end
+end
+
 local function startMinigame(id: string, runId: number?): boolean
 	if activeClient and activeClient.id == id and activeRunId == runId then
 		return false
@@ -216,7 +239,9 @@ local function handleShowEvent(event: string, payload: { [string]: any }?)
 			end
 		elseif type(phase) == "string" and phase ~= "Minigame" then
 			stopActive()
-			if phase ~= "Finale" then
+			if phase == "Finale" then
+				startFinalePresenter(payload)
+			else
 				stopFinalePresenter()
 			end
 		end
@@ -256,23 +281,7 @@ local function handleShowEvent(event: string, payload: { [string]: any }?)
 			presentSurprise(inner.kind)
 		end
 	elseif event == "FinaleStarted" then
-		stopActive()
-		finaleActive = true
-		hud:setGameplayVisible(false)
-		if finalePresenter then
-			local messageLines = if payload and type(payload.messageLines) == "table"
-				then payload.messageLines
-				else {}
-			pcall(function()
-				finalePresenter:start({
-					messageLines = messageLines,
-					payload = payload,
-				})
-			end)
-		else
-			hud:showMessage("Finale…")
-			SoundKit.play("softChime")
-		end
+		startFinalePresenter(payload)
 	elseif event == "FinaleBeat" then
 		local beat = payload and payload.beat
 		if type(beat) == "string" and finalePresenter and finaleActive then
