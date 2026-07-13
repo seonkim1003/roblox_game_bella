@@ -18,6 +18,7 @@ local StarController = {}
 
 local minigames: { [string]: Types.MinigameClient } = {}
 local activeClient: Types.MinigameClient? = nil
+local activeRunId: number? = nil
 local eventListeners: { (string, { [string]: any }?) -> () } = {}
 
 local input = InputRouter.new()
@@ -27,13 +28,14 @@ local function clearEventListeners()
 	table.clear(eventListeners)
 end
 
-local function buildContext(minigameId: string): Types.ClientContext
+local function buildContext(minigameId: string, runId: number?): Types.ClientContext
 	clearEventListeners()
 	return {
 		reportScore = function(score: number, data: { [string]: any }?)
 			hud:setScore(score, if data and type(data.detail) == "string" then data.detail else nil)
 			Net.get(Net.MinigameScore):FireServer({
 				id = minigameId,
+				runId = runId,
 				score = score,
 				data = data,
 			})
@@ -72,30 +74,64 @@ local function stopActive()
 		activeClient:stop()
 		activeClient = nil
 	end
+	activeRunId = nil
 	clearEventListeners()
 	input:setEnabled(false)
 	hud:setHint("")
+	hud:setGameplayVisible(false)
 end
 
-local function startMinigame(id: string)
+local function startMinigame(id: string, runId: number?): boolean
+	if activeClient and activeClient.id == id and activeRunId == runId then
+		return false
+	end
 	local client = minigames[id]
 	if not client then
 		warn(`[Bash][Star] no client for minigame {id}`)
-		return
+		return false
 	end
 	stopActive()
 	activeClient = client
+	activeRunId = runId
 	input:setEnabled(true)
+	hud:setGameplayVisible(true)
 	hud:setScore(0, nil)
 	hud:setHint("Tap / click / Space to drop")
-	client:start(buildContext(id))
+	client:start(buildContext(id, activeRunId))
+	return true
+end
+
+local function fanOutToActive(event: string, payload: { [string]: any }?)
+	for _, callback in eventListeners do
+		task.spawn(callback, event, payload)
+	end
 end
 
 local function handleShowEvent(event: string, payload: { [string]: any }?)
 	if event == "MinigameStarted" then
 		local id = payload and payload.id
+		local runId = payload and payload.runId
 		if type(id) == "string" then
-			startMinigame(id)
+			startMinigame(id, if type(runId) == "number" then runId else nil)
+		end
+		return
+	end
+	if event == "ShowState" then
+		local phase = payload and payload.phase
+		local id = payload and payload.activeMinigame
+		local runId = payload and payload.runId
+		if phase == "Minigame" and type(id) == "string" and type(runId) == "number" then
+			-- Recover when the Star's role boot happened after the original start
+			-- events. The server snapshot is authoritative for the active run.
+			if startMinigame(id, runId) then
+				local difficulty = payload and payload.difficulty
+				fanOutToActive(id .. "Begin", {
+					difficulty = if type(difficulty) == "number" then difficulty else 0.5,
+					resumedFromSnapshot = true,
+				})
+			end
+		elseif type(phase) == "string" and phase ~= "Minigame" then
+			stopActive()
 		end
 		return
 	end
@@ -107,26 +143,27 @@ local function handleShowEvent(event: string, payload: { [string]: any }?)
 		end
 	end
 
-	if event == "DirectorSignal" then
+	if event == "MessageShown" then
+		local text = payload and payload.text
+		if type(text) == "string" then
+			hud:showMessage(text)
+			SoundKit.play("softChime")
+		end
+	elseif event == "DogsSummoned" then
+		hud:showMessage("Gigi & Rambo appear!")
+		SoundKit.play("cheer")
+	elseif event == "DirectorSignal" then
 		local action = payload and payload.action
 		local inner = payload and payload.payload
-		if action == "SendMessage" and type(inner) == "table" and type(inner.text) == "string" then
-			hud:showMessage(inner.text)
-			SoundKit.play("softChime")
-		elseif action == "Surprise" and type(inner) == "table" and type(inner.kind) == "string" then
+		if action == "Surprise" and type(inner) == "table" and type(inner.kind) == "string" then
 			hud:flashSurprise(inner.kind)
 			Feedback.confetti(nil)
 			SoundKit.play("confetti")
-		elseif action == "SummonDogs" then
-			hud:showMessage("Gigi & Rambo appear!")
-			SoundKit.play("cheer")
 		end
 	end
 
 	-- Fan out to the active minigame's onEvent subscribers (CheeseTowerBegin, etc.)
-	for _, callback in eventListeners do
-		task.spawn(callback, event, payload)
-	end
+	fanOutToActive(event, payload)
 end
 
 function StarController.start()
@@ -134,6 +171,7 @@ function StarController.start()
 
 	loadMinigames()
 	hud:mount()
+	hud:setGameplayVisible(false)
 	input:start()
 	input:setEnabled(false)
 

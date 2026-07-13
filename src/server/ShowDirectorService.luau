@@ -390,16 +390,21 @@ local function handleCommand(player: Player, command: any)
 			reject(player, action, validationError or "That message is not valid")
 			return
 		end
-		local success, reason = SurpriseService.sendMessage(player, star, text, function()
-			return RoleService.roleOf(player) == "Director"
-				and RoleService.getStar() == star
-				and ShowState.canUseLiveEffect(state)
-		end)
+		local success, reason, isStudioPreview = SurpriseService.sendMessage(
+			player,
+			star,
+			text,
+			function()
+				return RoleService.roleOf(player) == "Director"
+					and RoleService.getStar() == star
+					and ShowState.canUseLiveEffect(state)
+			end
+		)
 		if not success then
 			reject(player, action, reason or "That message could not be sent")
 			return
 		end
-		accept(player, action)
+		accept(player, action, if isStudioPreview then "StudioPreview" else nil)
 	elseif action == "Surprise" or action == "StartFinale" then
 		reject(player, action, "That control arrives in Milestone 2")
 	end
@@ -452,9 +457,9 @@ local function handleScore(player: Player, report: any)
 	if type(id) ~= "string" or id ~= state.activeMinigame then
 		return
 	end
-	-- The frozen M0 score shape does not require a runId. Validate it when the
-	-- Star controller provides one, while retaining compatibility with M0.
-	if runId ~= nil and (type(runId) ~= "number" or runId ~= activeRunToken) then
+	-- Bind every score to the exact active run. This prevents a delayed packet
+	-- from an earlier Cheese Tower round being shown as part of a relaunch.
+	if type(runId) ~= "number" or runId ~= activeRunToken then
 		return
 	end
 	if type(score) ~= "number" or not isFinite(score) or score < 0 or score > MAX_SCORE then

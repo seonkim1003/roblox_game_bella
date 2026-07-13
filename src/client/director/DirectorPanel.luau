@@ -848,7 +848,12 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 		if accepted then
 			if action == "SendMessage" then
 				messageBox.Text = ""
-				showNotice("Message delivered to Bella.", false)
+				showNotice(
+					if detail == "StudioPreview"
+						then "Studio preview delivered. Published messages will use Roblox filtering."
+						else "Filtered message delivered to Bella.",
+					false
+				)
 			elseif action == "SummonDogs" then
 				showNotice(`Gigi and Rambo are performing: {detail or "cue received"}.`, false)
 			elseif action == "LaunchMinigame" then

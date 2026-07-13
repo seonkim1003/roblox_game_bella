@@ -6,6 +6,7 @@
 local Debris = game:GetService("Debris")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local TextService = game:GetService("TextService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
@@ -281,10 +282,6 @@ function SurpriseService.summonDogs(star: Player?, trick: string): (boolean, str
 			trick = trick,
 			dogs = names,
 		})
-		broadcast("DirectorSignal", {
-			action = "SummonDogs",
-			payload = { trick = trick },
-		})
 	end
 
 	return true, nil
@@ -295,40 +292,45 @@ function SurpriseService.sendMessage(
 	recipient: Player,
 	text: string,
 	canDeliver: DeliveryCheck
-): (boolean, string?)
+): (boolean, string?, boolean)
 	if sender.Parent ~= Players or recipient.Parent ~= Players or not canDeliver() then
-		return false, "Bella is not connected"
+		return false, "Bella is not connected", false
 	end
 
-	local filterSuccess, filterResult = pcall(function()
-		return TextService:FilterStringAsync(text, sender.UserId)
-	end)
-	if not filterSuccess or not filterResult then
-		warn("[Bash] Could not filter Director message")
-		return false, "Roblox could not filter that message; please try again"
-	end
+	-- Local multi-client tests use synthetic negative user IDs, which Roblox's
+	-- filtering service cannot process. Keep the bypass both Studio-only and
+	-- synthetic-ID-only so every production message still goes through Roblox.
+	local isStudioPreview = RunService:IsStudio() and sender.UserId <= 0
+	local deliveredText = `[Studio preview] {text}`
+	if not isStudioPreview then
+		local filterSuccess, filterResult = pcall(function()
+			return TextService:FilterStringAsync(text, sender.UserId)
+		end)
+		if not filterSuccess or not filterResult then
+			warn("[Bash] Could not filter Director message")
+			return false, "Roblox could not filter that message; please try again", false
+		end
 
-	local broadcastSuccess, filteredText = pcall(function()
-		return filterResult:GetNonChatStringForBroadcastAsync()
-	end)
-	if not broadcastSuccess or type(filteredText) ~= "string" then
-		warn("[Bash] Could not prepare filtered Director message")
-		return false, "Roblox could not prepare that message; please try again"
+		local broadcastSuccess, filteredText = pcall(function()
+			return filterResult:GetNonChatStringForBroadcastAsync()
+		end)
+		if not broadcastSuccess or type(filteredText) ~= "string" then
+			warn("[Bash] Could not prepare filtered Director message")
+			return false, "Roblox could not prepare that message; please try again", false
+		end
+		deliveredText = filteredText
 	end
 	if sender.Parent ~= Players or recipient.Parent ~= Players or not canDeliver() then
-		return false, "The show changed before that message could be delivered"
+		return false, "The show changed before that message could be delivered", false
 	end
 
 	if broadcast then
-		broadcast("MessageShown", { text = filteredText })
-		-- Compatibility envelope for the M1 StarController. The only text in
-		-- either event is the server-filtered result.
-		broadcast("DirectorSignal", {
-			action = "SendMessage",
-			payload = { text = filteredText },
+		broadcast("MessageShown", {
+			text = deliveredText,
+			studioPreview = isStudioPreview,
 		})
 	end
-	return true, nil
+	return true, nil, isStudioPreview
 end
 
 return SurpriseService

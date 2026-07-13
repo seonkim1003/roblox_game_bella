@@ -101,7 +101,12 @@ function DirectorController.start()
 				false
 			)
 		elseif event == "MessageShown" then
-			panel.setNotice("Your filtered message is now on Bella's screen.", false)
+			panel.setNotice(
+				if payload.studioPreview == true
+					then "Your Studio preview is now on Bella's screen."
+					else "Your filtered message is now on Bella's screen.",
+				false
+			)
 		end
 	end)
 

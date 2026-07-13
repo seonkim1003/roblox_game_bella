@@ -24,6 +24,7 @@ local id: Types.MinigameId = "CheeseTower"
 local CHEESE_COLOR = Color3.fromRGB(255, 206, 84)
 local CHEESE_HOLE = Color3.fromRGB(240, 180, 60)
 local STAGE_ORIGIN = Vector3.new(0, 4, -40)
+local SWING_HEIGHT = 6
 
 type Wheel = {
 	part: BasePart,
@@ -114,7 +115,7 @@ local function spawnSwing()
 		swinging = nil
 	end
 	local top = stack[#stack]
-	local y = if top then top.y + 1.5 else STAGE_ORIGIN.Y + 1.5
+	local y = if top then top.y + SWING_HEIGHT else STAGE_ORIGIN.Y + SWING_HEIGHT
 	swingCenter = if top then top.center else 0
 	swingT = 0
 	local part = makeWheelPart(currentWidth, y, swingCenter)

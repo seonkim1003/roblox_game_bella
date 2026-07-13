@@ -19,6 +19,7 @@ export type StarHudApi = {
 	setHint: (self: StarHudApi, text: string) -> (),
 	showMessage: (self: StarHudApi, text: string) -> (),
 	flashSurprise: (self: StarHudApi, kind: string) -> (),
+	setGameplayVisible: (self: StarHudApi, visible: boolean) -> (),
 	setVisible: (self: StarHudApi, visible: boolean) -> (),
 }
 
@@ -60,6 +61,7 @@ function StarHud.mount(self: any)
 	score.TextSize = 28
 	score.TextColor3 = Color3.new(1, 1, 1)
 	score.Text = "0"
+	score.Visible = false
 	score.Parent = gui
 
 	local scoreCorner = Instance.new("UICorner")
@@ -190,6 +192,15 @@ function StarHud.flashSurprise(self: any, kind: string)
 			BackgroundTransparency = 1,
 		})
 		:Play()
+end
+
+function StarHud.setGameplayVisible(self: any, visible: boolean)
+	if self._scoreLabel then
+		self._scoreLabel.Visible = visible
+	end
+	if self._hintLabel then
+		self._hintLabel.Visible = visible and self._hintLabel.Text ~= ""
+	end
 end
 
 function StarHud.setVisible(self: any, visible: boolean)
