@@ -192,6 +192,16 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 	backdrop.Size = UDim2.fromScale(1, 1)
 	backdrop.Parent = gui
 
+	-- This control intentionally lives beside the backdrop, not inside it, so
+	-- the Director can always restore the console after hiding it.
+	local consoleToggle = createButton(gui, "Hide Console  ·  F2", COLORS.cardRaised)
+	consoleToggle.Name = "ConsoleToggle"
+	consoleToggle.AnchorPoint = Vector2.new(1, 1)
+	consoleToggle.Position = UDim2.new(1, -18, 1, -14)
+	consoleToggle.Size = UDim2.fromOffset(176, 42)
+	consoleToggle.TextSize = 13
+	consoleToggle.ZIndex = 100
+
 	local gradient = Instance.new("UIGradient")
 	gradient.Color = ColorSequence.new({
 		ColorSequenceKeypoint.new(0, COLORS.background),
@@ -586,15 +596,21 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 	local lastSliderSend = 0
 	local sliderSendGeneration = 0
 	local controllerNavigationActive = false
+	local consoleVisible = true
 
 	local function showNotice(text: string, isError: boolean?)
 		notice.Text = text
 		notice.TextColor3 = if isError then COLORS.error else COLORS.muted
 	end
 
-	local function focusFirstAvailable()
+	local function focusFirstAvailable(force: boolean?)
+		if not backdrop.Visible then
+			GuiService.SelectedObject = consoleToggle
+			return
+		end
+
 		local selected = GuiService.SelectedObject
-		if selected and selected.Selectable then
+		if not force and selected and selected.Selectable then
 			return
 		end
 
@@ -613,6 +629,26 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 				return
 			end
 		end
+	end
+
+	local function setConsoleVisible(visible: boolean)
+		consoleVisible = visible
+		backdrop.Visible = visible
+		consoleToggle.Text = if visible then "Hide Console  ·  F2" else "Open Console  ·  F2"
+
+		if controllerNavigationActive then
+			-- This path only runs after genuine gamepad input, so Studio's GUI
+			-- selection context is initialized (see the startup-crash guard below).
+			task.defer(function()
+				if gui.Parent then
+					focusFirstAvailable(true)
+				end
+			end)
+		end
+	end
+
+	local function toggleConsole()
+		setConsoleVisible(not consoleVisible)
 	end
 
 	local function refreshControls()
@@ -694,6 +730,12 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 					focusFirstAvailable()
 				end
 			end)
+		end
+	end))
+	trove:Add(consoleToggle.Activated:Connect(toggleConsole))
+	trove:Add(UserInputService.InputBegan:Connect(function(input: InputObject)
+		if input.KeyCode == Enum.KeyCode.F2 or input.KeyCode == Enum.KeyCode.ButtonSelect then
+			toggleConsole()
 		end
 	end))
 
