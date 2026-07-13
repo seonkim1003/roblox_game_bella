@@ -585,10 +585,34 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 	local draggingSlider = false
 	local lastSliderSend = 0
 	local sliderSendGeneration = 0
+	local controllerNavigationActive = false
 
 	local function showNotice(text: string, isError: boolean?)
 		notice.Text = text
 		notice.TextColor3 = if isError then COLORS.error else COLORS.muted
+	end
+
+	local function focusFirstAvailable()
+		local selected = GuiService.SelectedObject
+		if selected and selected.Selectable then
+			return
+		end
+
+		local focusCandidates: { TextButton } = {
+			startHubButton,
+			launchButtons.CheeseTower,
+			launchButtons.DogDash,
+			launchButtons.SatisfyStation,
+			endButton,
+			minusButton,
+			plusButton,
+		}
+		for _, candidate in focusCandidates do
+			if candidate.Selectable then
+				GuiService.SelectedObject = candidate
+				return
+			end
+		end
 	end
 
 	local function refreshControls()
@@ -610,23 +634,8 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 		end
 		setButtonEnabled(sendButton, livePhase and starConnected and messageBox.Text ~= "")
 
-		local selected = GuiService.SelectedObject
-		if selected and not selected.Selectable then
-			local focusCandidates: { TextButton } = {
-				startHubButton,
-				launchButtons.CheeseTower,
-				launchButtons.DogDash,
-				launchButtons.SatisfyStation,
-				endButton,
-				minusButton,
-				plusButton,
-			}
-			for _, candidate in focusCandidates do
-				if candidate.Selectable then
-					GuiService.SelectedObject = candidate
-					break
-				end
-			end
+		if controllerNavigationActive then
+			focusFirstAvailable()
 		end
 	end
 
@@ -673,6 +682,20 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 			1
 		)
 	end
+
+	trove:Add(UserInputService.LastInputTypeChanged:Connect(function(inputType: Enum.UserInputType)
+		controllerNavigationActive = string.sub(inputType.Name, 1, 7) == "Gamepad"
+		if controllerNavigationActive then
+			-- Studio's selection context is not guaranteed to exist while the
+			-- PlayClient is still booting. Only touch SelectedObject after actual
+			-- gamepad input, when navigation is initialized.
+			task.defer(function()
+				if gui.Parent then
+					focusFirstAvailable()
+				end
+			end)
+		end
+	end))
 
 	trove:Add(startHubButton.Activated:Connect(function()
 		sendCommand("StartHub", nil)
@@ -875,10 +898,6 @@ function DirectorPanel.new(sendCommand: SendCommand): Panel
 	setPhase(currentPhase, currentMinigame)
 	setStarConnection(false, nil)
 	refreshControls()
-
-	if not UserInputService.TouchEnabled then
-		GuiService.SelectedObject = startHubButton
-	end
 
 	return {
 		applyState = applyState,

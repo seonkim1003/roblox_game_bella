@@ -10,7 +10,7 @@
         "CanCollide": true,
         "Color": [0.149, 0.118, 0.212],
         "Material": "SmoothPlastic",
-        "Position": [0, -0.5, 0],
+        "CFrame": [0, -0.5, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
         "Size": [120, 1, 120],
         "TopSurface": "Smooth"
       }
@@ -26,7 +26,7 @@
         "Duration": 0,
         "Material": "Neon",
         "Neutral": true,
-        "Position": [0, 0.5, 12],
+        "CFrame": [0, 0.5, 12, 1, 0, 0, 0, 1, 0, 0, 0, 1],
         "Size": [12, 1, 12],
         "TopSurface": "Smooth",
         "Transparency": 0.15
