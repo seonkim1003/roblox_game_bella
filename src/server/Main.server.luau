@@ -1,6 +1,11 @@
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+-- Server bootstrap. FROZEN after Milestone 0.
+-- RoleService assigns Director/Star; ShowDirectorService runs the show and
+-- folder-loads minigames from src/server/minigames (no edit needed to add one).
 
-local Shared = ReplicatedStorage:WaitForChild("Shared")
-local Greeting = require(Shared.Greeting)
+local RoleService = require(script.Parent.RoleService)
+local ShowDirectorService = require(script.Parent.ShowDirectorService)
 
-print(Greeting.message("server"))
+RoleService.start()
+ShowDirectorService.start()
+
+print("[Bash] Server ready -- Bella's Birthday Bash is standing by.")

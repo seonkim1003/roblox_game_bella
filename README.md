@@ -1,6 +1,9 @@
 # roblox_game
 
-AI-directed Roblox birthday game built with strict Luau, Rojo, and automated validation.
+AI-directed Roblox game built with strict Luau, Rojo, and automated validation.
+
+This is a fresh project. `src/server/Main.server.luau` and `src/client/Main.client.luau`
+are empty entry points ready for you to build on.
 
 ## First-time setup
 
@@ -39,8 +42,6 @@ For AI feature prompts and playtest feedback, see `docs/AI_WORKFLOW.md`. All cod
 - `src/client`: LocalScripts under `StarterPlayerScripts`
 - `src/server`: Scripts under `ServerScriptService`
 - `src/shared`: Modules under `ReplicatedStorage.Shared`
-- `src/ReplicatedStorage`: other replicated instances
-- `src/workspace`: Workspace instances
 - `tests`: pure Luau tests run through Lune
 - `art/source`: editable art and audio masters tracked with Git LFS
 - `art/export`: reviewed files ready for Roblox import

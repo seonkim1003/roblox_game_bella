@@ -1,6 +1,6 @@
 [package]
 name = "seonkim1003/roblox-game-bella"
-description = "A birthday Roblox experience built with Rojo"
+description = "A Roblox experience built with Rojo"
 version = "0.1.0"
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"

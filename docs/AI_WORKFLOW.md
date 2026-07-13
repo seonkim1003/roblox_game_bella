@@ -13,7 +13,7 @@ The human role on this project is creative direction and playtesting. AI agents 
 ## Prompt template
 
 ```text
-Build [feature] for this Roblox birthday game.
+Build [feature] for this Roblox game.
 
 Player experience: [what the player should feel and do]
 Visual mood: [colors, references, atmosphere]
