@@ -39,9 +39,9 @@ Then open Roblox Studio, use the Rojo plugin, and connect to the local server.
 
 1. Start Rojo with `rojo serve default.project.json` and connect the Studio plugin.
 2. In Studio's **Test** tab, choose **Local Server**, set **Players** to `2`, and start.
-3. In Studio, choose **Host** for the Director controls and **Bella** for the Star
-   experience. Studio role selection and `BashRoleOverride` remain available even
-   while production IDs are unset.
+3. On the role-selection screen, choose **Host** for the Director controls and
+   **Bella** for the Star experience. Each role can be claimed once. Studio also
+   supports `BashRoleOverride` for focused local testing.
 4. The Director opens the invitation and Bella chooses a mood. Follow the authored
    order: **Ratthew's Cheese Tower** (`CheeseTower`), the Rambo-versus-Gigi cinematic
    followed by **Gigi & Rambo Dash** (`DogDash`), then **ASMR Satisfy Station**
@@ -57,10 +57,9 @@ Then open Roblox Studio, use the Rojo plugin, and connect to the local server.
    guest reveal completes, and the camera returns on completion or cancellation.
 
 The name, dog details, palette, guardrails, and finale message are already populated
-in `src/shared/Config.luau`; they are not generic placeholders. The Director and Bella
-Roblox user IDs are intentionally still zero until the real IDs are supplied. Studio
-continues to allow local role overrides, but a published server fails closed until
-both IDs are non-zero and different.
+in `src/shared/Config.luau`; they are not generic placeholders. Role IDs are optional:
+leaving them at zero lets the two players choose Host or Bella when they join. A
+non-zero ID may be used later only if a role should be reserved for one account.
 
 ## Authoritative scoring contract
 

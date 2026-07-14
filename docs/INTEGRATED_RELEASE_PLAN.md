@@ -63,9 +63,8 @@ These are shared acceptance tasks, not unfinished Agent A or Agent B implementat
 4. Disconnect the Director and verify deterministic Showrunner takeover.
 5. Verify reduced motion, muted audio, visual sound cues, and finale controls during a complete run.
 6. Profile target-mobile performance and inspect the world-budget attributes in Studio.
-7. Add the real Director and Bella Roblox user IDs. The existing name, message, dog
-   details, palette, and guardrails are already personalized; published servers fail
-   closed while either role ID is zero or both IDs are the same.
+7. Verify the join-time Host/Bella role picker in the published private server.
+   Account IDs remain optional and are only needed if either role should be reserved.
 8. Publish privately and complete a two-device rehearsal.
 
 ## Error and regression policy
