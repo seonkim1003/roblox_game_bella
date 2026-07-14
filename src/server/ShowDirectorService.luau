@@ -27,6 +27,7 @@ local PerformanceSummary = require(script.Parent.PerformanceSummary)
 local ShowState = require(script.Parent.ShowState)
 local ShowSession = require(script.Parent.ShowSession)
 local SurpriseService = require(script.Parent.SurpriseService)
+local DogFightService = require(script.Parent.DogFightService)
 local HubBuilder = require(script.Parent.world.HubBuilder)
 local TokenBucket = require(script.Parent.TokenBucket)
 
@@ -449,6 +450,7 @@ local function launchMinigame(player: Player, id: string)
 	end
 
 	stopActiveMinigame()
+	DogFightService.cancel()
 	state = transition.state
 	activeMinigame = minigame
 	activeRunToken += 1
@@ -486,9 +488,15 @@ local function launchMinigame(player: Player, id: string)
 	if not success then
 		warn(`[Bash] Failed to start {id}: {startError}`)
 		stopActiveMinigame()
+		DogFightService.cancel()
+		local sessionAbort = ShowSession.abortAct(session, workspace:GetServerTimeNow())
+		if not sessionAbort.error then
+			session = sessionAbort.state
+		end
 		local rollback = ShowState.transition(state, "EndMinigame", nil)
 		state = rollback.state
 		broadcast("MinigameFailed", { id = id })
+		broadcast("PremierePhaseChanged", { phase = session.phase, revision = session.revision })
 		broadcast("PhaseChanged", { phase = state.phase })
 		publishState("MinigameFailed")
 		reject(player, "LaunchMinigame", "That game could not start")
@@ -535,14 +543,20 @@ local function queueAct(player: Player, requestedId: string): (boolean, string?)
 		return false, transition.error
 	end
 	session = transition.state
+	local introSeconds = 4
+	if requestedId == "DogDash" then
+		DogFightService.play()
+		introSeconds = math.max(4, DogFightService.remaining() + 0.4)
+	end
 	broadcast("ActIntroduction", {
 		gameId = requestedId,
 		actIndex = session.actIndex,
 		totalActs = ACT_COUNT,
+		dogFight = requestedId == "DogDash",
 	})
 	publishState("ActIntroduction")
 	local revision = session.revision
-	task.delay(4, function()
+	task.delay(introSeconds, function()
 		if session.phase == "ActIntroduction" and session.revision == revision then
 			launchMinigame(player, requestedId)
 		end
@@ -623,13 +637,27 @@ advancePremiere = function(reason: string): (boolean, string?)
 		return false, transition.error
 	end
 	session = transition.state
-	broadcast("PremierePhaseChanged", { phase = session.phase, revision = session.revision })
+	local expectedId = ShowConstants.MinigameOrder[session.actIndex + 1]
+	broadcast("PremierePhaseChanged", {
+		phase = session.phase,
+		revision = session.revision,
+		nextGameId = expectedId,
+		dogFight = expectedId == "DogDash",
+	})
 	publishState(reason)
 	if session.phase == "Interlude" then
-		local expectedId = ShowConstants.MinigameOrder[session.actIndex + 1]
-		broadcast("InterludeStarted", { nextGameId = expectedId, duration = 6 })
+		local interludeSeconds = 6
+		if expectedId == "DogDash" then
+			DogFightService.play()
+			interludeSeconds = math.min(6, DogFightService.duration() * 0.55)
+		end
+		broadcast("InterludeStarted", {
+			nextGameId = expectedId,
+			duration = interludeSeconds,
+			dogFight = expectedId == "DogDash",
+		})
 		local revision = session.revision
-		task.delay(6, function()
+		task.delay(interludeSeconds, function()
 			if session.phase ~= "Interlude" or session.revision ~= revision or not expectedId then
 				return
 			end
@@ -737,6 +765,7 @@ local function handleCommand(player: Player, command: any)
 				reject(player, action, "No act is ready")
 				return
 			end
+			DogFightService.cancel()
 			launchMinigame(player, id)
 			return
 		elseif session.phase == "ActResult" then
@@ -753,6 +782,7 @@ local function handleCommand(player: Player, command: any)
 				reject(player, action, "No act remains")
 				return
 			end
+			-- Keep the live fight going into ActIntroduction when skipping the wait.
 			local success, reason = queueAct(player, id)
 			if not success then
 				reject(player, action, reason or "Cannot skip")
@@ -957,6 +987,11 @@ local function handleCommand(player: Player, command: any)
 			accept(player, action, id)
 		end
 	elseif action == "EndMinigame" then
+		local sessionAbort = ShowSession.abortAct(session, workspace:GetServerTimeNow())
+		if sessionAbort.error then
+			reject(player, action, sessionAbort.error)
+			return
+		end
 		local transition = ShowState.transition(state, action, payload)
 		if transition.error then
 			reject(player, action, transition.error)
@@ -964,8 +999,11 @@ local function handleCommand(player: Player, command: any)
 		end
 		local endedId = state.activeMinigame
 		stopActiveMinigame()
+		DogFightService.cancel()
+		session = sessionAbort.state
 		state = transition.state
 		broadcast("MinigameEnded", { id = endedId })
+		broadcast("PremierePhaseChanged", { phase = session.phase, revision = session.revision })
 		broadcast("PhaseChanged", { phase = state.phase })
 		publishState("EndMinigame")
 		accept(player, action)
@@ -1227,6 +1265,7 @@ function ShowDirectorService.start()
 	loadMinigames()
 	HubBuilder.start()
 	SurpriseService.start(broadcast)
+	DogFightService.start(broadcast)
 	FinaleService.start(broadcast)
 	RoleService.onRolesChanged(function()
 		if
@@ -1263,6 +1302,11 @@ function ShowDirectorService.start()
 					then activeRoundConfig.roundId
 					else nil
 				stopActiveMinigame()
+				DogFightService.cancel()
+				local sessionAbort = ShowSession.abortAct(session, workspace:GetServerTimeNow())
+				if not sessionAbort.error then
+					session = sessionAbort.state
+				end
 				local transition = ShowState.transition(state, "EndMinigame", nil)
 				if not transition.error then
 					state = transition.state
@@ -1270,6 +1314,10 @@ function ShowDirectorService.start()
 						id = interruptedId,
 						roundId = interruptedRoundId,
 						reason = "RoundAbandoned",
+					})
+					broadcast("PremierePhaseChanged", {
+						phase = session.phase,
+						revision = session.revision,
 					})
 					broadcast("PhaseChanged", { phase = state.phase })
 					publishState("RoundAbandoned")

@@ -24,9 +24,9 @@ export type FinalePresenterApi = {
 }
 
 export type CutsceneDirectorApi = {
-	start: (self: CutsceneDirectorApi) -> (),
-	handle: (self: CutsceneDirectorApi, event: string, payload: { [string]: any }?) -> (),
-	stop: (self: CutsceneDirectorApi) -> (),
+	start: () -> (),
+	handle: (event: string, payload: { [string]: any }?) -> (),
+	stop: () -> (),
 }
 
 local StarController = {}
@@ -293,14 +293,24 @@ local function startFinalePresenter(payload: { [string]: any }?)
 	end
 	finaleActive = true
 	hud:setGameplayVisible(false)
+	if cutsceneDirector then
+		-- Yield any pre-finale act/interlude camera so finale owns CutsceneCamera.
+		pcall(function()
+			cutsceneDirector.stop()
+		end)
+	end
 	if finalePresenter then
 		local messageLines = if payload and type(payload.messageLines) == "table"
 			then payload.messageLines
 			else {}
+		local summary = if payload and type(payload.summary) == "table"
+			then payload.summary
+			else nil
 		pcall(function()
 			finalePresenter:start({
 				messageLines = messageLines,
-				payload = payload,
+				summary = summary,
+				starName = if payload then payload.starName else nil,
 			})
 		end)
 	else
@@ -358,7 +368,8 @@ end
 local function handleShowEvent(event: string, payload: { [string]: any }?)
 	if cutsceneDirector then
 		pcall(function()
-			cutsceneDirector:handle(event, payload)
+			-- Module functions are not methods — colon-call would shift args and kill act cameras.
+			cutsceneDirector.handle(event, payload)
 		end)
 	end
 
@@ -475,7 +486,7 @@ function StarController.start()
 	input:setEnabled(false)
 	if cutsceneDirector then
 		pcall(function()
-			cutsceneDirector:start()
+			cutsceneDirector.start()
 		end)
 	end
 

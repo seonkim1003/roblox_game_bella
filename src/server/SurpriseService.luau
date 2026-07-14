@@ -308,7 +308,8 @@ local function animateTrick(dog: Model, target: CFrame, trick: string, side: num
 			if not dog.Parent then
 				return
 			end
-			DogPuppet.play(dog, "Spin")
+			-- Root yaw is the spin; keep Idle limb pose so body Motor6D doesn't double-rotate.
+			DogPuppet.play(dog, "Idle")
 			task.spawn(function()
 				for quarter = 1, 4 do
 					if not root.Parent then

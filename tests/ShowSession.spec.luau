@@ -69,4 +69,21 @@ expect(ShowSession.requestEncore(encore.state).error ~= nil, "encore is determin
 local replay = ShowSession.replay(encore.state, 17)
 expect(replay.state.phase == "Lounge" and #replay.state.results == 0, "replay resets acts")
 
+local abortIntro = ShowSession.introduceAct(lounge.state, "CheeseTower", 20)
+local aborted = ShowSession.abortAct(abortIntro.state, 21)
+expect(
+	aborted.state.phase == "Lounge"
+		and aborted.state.actIndex == 0
+		and aborted.state.activeGameId == nil,
+	"aborting an introduced act returns to lounge"
+)
+local abortPlay =
+	ShowSession.beginAct(ShowSession.introduceAct(lounge.state, "CheeseTower", 22).state, 23)
+local abortedPlay = ShowSession.abortAct(abortPlay.state, 24)
+expect(
+	abortedPlay.state.phase == "Lounge" and abortedPlay.state.actIndex == 0,
+	"aborting mid-act rolls back"
+)
+expect(ShowSession.abortAct(lounge.state, 25).error ~= nil, "abort rejected outside an act")
+
 print(`PASS ShowSession.spec ({assertions} assertions)`)

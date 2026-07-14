@@ -149,6 +149,18 @@ function ShowSession.beginAct(state: State, now: number): Transition
 	return accept(clone(state), "Minigame", now)
 end
 
+-- Soft abort: Director stops an in-progress act, or Star abandons after grace.
+-- Rolls the act index back so the same ordered act can be re-introduced.
+function ShowSession.abortAct(state: State, now: number): Transition
+	if state.phase ~= "Minigame" and state.phase ~= "ActIntroduction" then
+		return reject(state, "there is no active act to abort")
+	end
+	local nextState = clone(state)
+	nextState.actIndex = math.max(0, nextState.actIndex - 1)
+	nextState.activeGameId = nil
+	return accept(nextState, "Lounge", now)
+end
+
 function ShowSession.completeAct(state: State, result: Result, now: number): Transition
 	if state.phase ~= "Minigame" or state.activeGameId ~= result.gameId then
 		return reject(state, "result does not match the active act")
