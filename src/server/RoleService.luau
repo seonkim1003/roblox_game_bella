@@ -1,8 +1,7 @@
 --!strict
 
--- Assigns exactly one Director and one Star, then keeps both clients informed.
--- The repeated assignment delivery is a compatibility safeguard for the frozen
--- one-way M0 role contract, which has no client-ready handshake.
+-- Accepts one server-validated Host (Director) and Bella (Star) selection, then
+-- keeps both clients informed. Repeated delivery covers client startup timing.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -16,6 +15,7 @@ local Types = require(Shared.Types)
 type RolesChangedCallback = () -> ()
 
 local ASSIGNMENT_RETRIES = { 0, 1, 3 }
+local SELECTION_COOLDOWN_SECONDS = 0.75
 
 local RoleService = {}
 
@@ -23,6 +23,7 @@ local roleByPlayer: { [Player]: Types.Role } = {}
 local rolesChangedCallbacks: { RolesChangedCallback } = {}
 local directorPlayer: Player? = nil
 local starPlayer: Player? = nil
+local lastSelectionAt: { [Player]: number } = {}
 local started = false
 
 local function notifyRolesChanged()
@@ -63,39 +64,84 @@ local function studioOverride(): Types.Role?
 	return nil
 end
 
-local function chooseRole(player: Player): Types.Role?
-	local override = studioOverride()
-	if override == "Director" and directorPlayer == nil then
-		return override
-	elseif override == "Star" and starPlayer == nil then
-		return override
-	end
-
+local function configuredRole(player: Player): Types.Role?
 	local matchesDirector = Config.directorUserId ~= 0 and player.UserId == Config.directorUserId
 	local matchesStar = Config.starUserId ~= 0 and player.UserId == Config.starUserId
-
-	if
-		not directorPlayer and (matchesDirector or (Config.directorUserId == 0 and not matchesStar))
-	then
+	if matchesDirector then
 		local role: Types.Role = "Director"
 		return role
-	elseif not starPlayer and (matchesStar or (Config.starUserId == 0 and not matchesDirector)) then
+	elseif matchesStar then
 		local role: Types.Role = "Star"
 		return role
 	end
-
 	return nil
 end
 
 local function onPlayerAdded(player: Player)
 	if roleByPlayer[player] then
 		deliverRole(player, roleByPlayer[player])
+	end
+end
+
+local function sendSelectionError(player: Player, message: string)
+	Net.get(Net.RoleAssigned):FireClient(player, { error = message })
+end
+
+local function selectionAllowed(player: Player, selectedRole: Types.Role): boolean
+	local requiredRole = studioOverride() or configuredRole(player)
+	if requiredRole and selectedRole ~= requiredRole then
+		sendSelectionError(
+			player,
+			if requiredRole == "Director" then "Please choose Host." else "Please choose Bella."
+		)
+		return false
+	end
+
+	if
+		Config.directorUserId ~= 0
+		and selectedRole == "Director"
+		and player.UserId ~= Config.directorUserId
+	then
+		sendSelectionError(player, "The Host choice is reserved.")
+		return false
+	elseif
+		Config.starUserId ~= 0
+		and selectedRole == "Star"
+		and player.UserId ~= Config.starUserId
+	then
+		sendSelectionError(player, "The Bella choice is reserved.")
+		return false
+	end
+
+	return true
+end
+
+local function onRoleSelection(player: Player, data: any)
+	local now = os.clock()
+	local previousSelection = lastSelectionAt[player]
+	if previousSelection and now - previousSelection < SELECTION_COOLDOWN_SECONDS then
+		sendSelectionError(player, "Please wait a moment, then choose again.")
+		return
+	end
+	lastSelectionAt[player] = now
+
+	if roleByPlayer[player] then
+		deliverRole(player, roleByPlayer[player])
+		return
+	end
+	if type(data) ~= "table" or (data.role ~= "Director" and data.role ~= "Star") then
 		return
 	end
 
-	local selectedRole = chooseRole(player)
-	if selectedRole ~= "Director" and selectedRole ~= "Star" then
-		player:Kick("This private birthday show already has its Director and Star.")
+	local selectedRole: Types.Role = data.role
+	if not selectionAllowed(player, selectedRole) then
+		return
+	end
+	if selectedRole == "Director" and directorPlayer then
+		sendSelectionError(player, "Host has already joined. Please choose Bella.")
+		return
+	elseif selectedRole == "Star" and starPlayer then
+		sendSelectionError(player, "Bella has already joined. Please choose Host.")
 		return
 	end
 
@@ -117,6 +163,7 @@ end
 
 local function onPlayerRemoving(player: Player)
 	roleByPlayer[player] = nil
+	lastSelectionAt[player] = nil
 	if directorPlayer == player then
 		directorPlayer = nil
 	end
@@ -154,6 +201,7 @@ function RoleService.start()
 
 	Players.PlayerAdded:Connect(onPlayerAdded)
 	Players.PlayerRemoving:Connect(onPlayerRemoving)
+	Net.get(Net.RoleSelection).OnServerEvent:Connect(onRoleSelection)
 	for _, player in Players:GetPlayers() do
 		onPlayerAdded(player)
 	end

@@ -13,14 +13,14 @@ local Config = require(Shared.Config)
 
 -- Named catalog. Keep volumes low; Feedback callers can still pass options.volume.
 local CATALOG: { [string]: { id: string, volume: number, speed: number } } = {
-	plop = { id = "rbxassetid://9125412681", volume = 0.35, speed = 1.05 },
+	plop = { id = "rbxassetid://9113856075", volume = 0.35, speed = 1.05 },
 	squelch = { id = "rbxassetid://9114225473", volume = 0.28, speed = 0.9 },
 	pop = { id = "rbxassetid://9117482890", volume = 0.3, speed = 1.15 },
 	cheer = { id = "rbxassetid://9114500962", volume = 0.25, speed = 1.1 },
 	wobble = { id = "rbxassetid://9113825223", volume = 0.22, speed = 0.85 },
 	crumble = { id = "rbxassetid://9113825223", volume = 0.3, speed = 0.7 },
 	confetti = { id = "rbxassetid://9117482890", volume = 0.28, speed = 1.3 },
-	softChime = { id = "rbxassetid://9125412681", volume = 0.2, speed = 1.4 },
+	softChime = { id = "rbxassetid://9116394545", volume = 0.2, speed = 1.15 },
 }
 
 local SoftCap = if Config.guardrails.suddenLoudNoises == false then 0.45 else 0.85

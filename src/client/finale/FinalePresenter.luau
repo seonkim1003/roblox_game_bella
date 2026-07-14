@@ -10,6 +10,7 @@ local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
+local VisualConfig = require(Shared.VisualConfig)
 
 local Feedback = require(script.Parent.Parent.juice.Feedback)
 local SoundKit = require(script.Parent.Parent.juice.SoundKit)
@@ -26,6 +27,7 @@ local gui: ScreenGui? = nil
 local titleLabel: TextLabel? = nil
 local messageLabel: TextLabel? = nil
 local shade: Frame? = nil
+local messageCard: Frame? = nil
 local previousCameraType: Enum.CameraType? = nil
 local previousCameraSubject: Instance? = nil
 local previousCameraCFrame: CFrame? = nil
@@ -56,7 +58,7 @@ local function mount()
 
 	local backdrop = Instance.new("Frame")
 	backdrop.Name = "CinematicShade"
-	backdrop.BackgroundColor3 = Color3.fromRGB(11, 14, 24)
+	backdrop.BackgroundColor3 = VisualConfig.palette.night
 	backdrop.BackgroundTransparency = 1
 	backdrop.BorderSizePixel = 0
 	backdrop.Size = UDim2.fromScale(1, 1)
@@ -72,6 +74,16 @@ local function mount()
 	vignette.Rotation = 90
 	vignette.Parent = backdrop
 
+	for _, position in { UDim2.fromScale(0.5, 0), UDim2.fromScale(0.5, 1) } do
+		local bar = Instance.new("Frame")
+		bar.AnchorPoint = Vector2.new(0.5, if position.Y.Scale == 0 then 0 else 1)
+		bar.BackgroundColor3 = Color3.fromRGB(10, 12, 19)
+		bar.BorderSizePixel = 0
+		bar.Position = position
+		bar.Size = UDim2.fromScale(1, 0.07)
+		bar.Parent = backdrop
+	end
+
 	local title = Instance.new("TextLabel")
 	title.AnchorPoint = Vector2.new(0.5, 0)
 	title.BackgroundTransparency = 1
@@ -79,24 +91,52 @@ local function mount()
 	title.Position = UDim2.fromScale(0.5, 0.1)
 	title.Size = UDim2.new(0.85, 0, 0, 44)
 	title.Text = "ONE LAST SURPRISE"
-	title.TextColor3 = Color3.fromRGB(211, 196, 229)
+	title.TextColor3 = VisualConfig.palette.linen
 	title.TextScaled = true
 	title.TextTransparency = 1
 	title.Parent = backdrop
 	titleLabel = title
 
+	local card = Instance.new("Frame")
+	card.AnchorPoint = Vector2.new(0.5, 1)
+	card.BackgroundColor3 = VisualConfig.palette.plumDeep
+	card.BackgroundTransparency = 0.2
+	card.BorderSizePixel = 0
+	card.Position = UDim2.fromScale(0.5, 0.9)
+	card.Size = UDim2.fromScale(0.82, 0.2)
+	card.Parent = backdrop
+	messageCard = card
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 22)
+	corner.Parent = card
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = VisualConfig.palette.butter
+	stroke.Thickness = 1.5
+	stroke.Transparency = 0.45
+	stroke.Parent = card
+	local accent = Instance.new("Frame")
+	accent.AnchorPoint = Vector2.new(0.5, 0)
+	accent.BackgroundColor3 = VisualConfig.palette.blush
+	accent.BorderSizePixel = 0
+	accent.Position = UDim2.fromScale(0.5, 0)
+	accent.Size = UDim2.new(0.22, 0, 0, 4)
+	accent.Parent = card
+	local accentCorner = Instance.new("UICorner")
+	accentCorner.CornerRadius = UDim.new(1, 0)
+	accentCorner.Parent = accent
+
 	local message = Instance.new("TextLabel")
 	message.AnchorPoint = Vector2.new(0.5, 1)
 	message.BackgroundTransparency = 1
 	message.Font = Enum.Font.GothamBold
-	message.Position = UDim2.fromScale(0.5, 0.89)
-	message.Size = UDim2.fromScale(0.86, 0.22)
+	message.Position = UDim2.fromScale(0.5, 0.92)
+	message.Size = UDim2.fromScale(0.9, 0.82)
 	message.Text = ""
-	message.TextColor3 = Color3.fromRGB(255, 235, 246)
+	message.TextColor3 = VisualConfig.palette.cream
 	message.TextScaled = true
 	message.TextTransparency = 1
 	message.TextWrapped = true
-	message.Parent = backdrop
+	message.Parent = card
 	messageLabel = message
 end
 
@@ -157,7 +197,8 @@ local function begin(lines: { string })
 	local backdrop = shade
 	local title = titleLabel
 	local message = messageLabel
-	if not screen or not backdrop or not title or not message then
+	local card = messageCard
+	if not screen or not backdrop or not title or not message or not card then
 		return
 	end
 
@@ -165,8 +206,10 @@ local function begin(lines: { string })
 	backdrop.BackgroundTransparency = 1
 	title.TextTransparency = 1
 	message.TextTransparency = 1
+	card.BackgroundTransparency = 1
 	tween(backdrop, 2.2, { BackgroundTransparency = 0.42 })
 	tween(title, 1.5, { TextTransparency = 0.15 })
+	tween(card, 1.8, { BackgroundTransparency = 0.2 })
 	SoundKit.play("softChime", nil)
 	focusCamera(token)
 
@@ -227,6 +270,7 @@ function FinalePresenter.stop(_self: any)
 	if gui then
 		gui:Destroy()
 		gui = nil
+		messageCard = nil
 	end
 end
 

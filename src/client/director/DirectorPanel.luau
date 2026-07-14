@@ -10,8 +10,14 @@ local UserInputService = game:GetService("UserInputService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
+local VisualConfig = require(Shared.VisualConfig)
 local Packages = ReplicatedStorage:WaitForChild("Packages")
-local Trove = require(Packages.Trove)
+-- Wally alias modules can briefly be absent when Studio connects after the
+-- package index has already synced. Resolve the pinned package directly as a
+-- fallback so the Director console still boots in that valid Rojo state.
+local TroveModule = Packages:FindFirstChild("Trove")
+	or Packages:WaitForChild("_Index"):WaitForChild("sleitnick_trove@1.8.0"):WaitForChild("trove")
+local Trove = (require :: any)(TroveModule :: ModuleScript)
 
 type Payload = { [string]: any }
 type SendCommand = (action: string, payload: Payload?) -> ()
@@ -31,17 +37,17 @@ local PANEL_NAME = "BirthdayBashDirectorPanel"
 local MESSAGE_LIMIT = 160
 
 local COLORS = {
-	background = Color3.fromRGB(24, 18, 36),
-	card = Color3.fromRGB(43, 33, 61),
-	cardRaised = Color3.fromRGB(55, 42, 76),
-	text = Color3.fromRGB(255, 247, 238),
-	muted = Color3.fromRGB(195, 183, 207),
-	outline = Color3.fromRGB(102, 82, 127),
-	good = Color3.fromRGB(102, 220, 163),
-	warning = Color3.fromRGB(255, 194, 102),
-	error = Color3.fromRGB(255, 119, 137),
-	primary = Config.palette.primary,
-	accent = Config.palette.accent,
+	background = VisualConfig.palette.plumDeep,
+	card = VisualConfig.palette.plum,
+	cardRaised = VisualConfig.palette.plum:Lerp(VisualConfig.palette.cream, 0.1),
+	text = VisualConfig.palette.cream,
+	muted = VisualConfig.palette.linen,
+	outline = VisualConfig.palette.plum:Lerp(VisualConfig.palette.cream, 0.28),
+	good = VisualConfig.palette.mint,
+	warning = VisualConfig.palette.butter,
+	error = Color3.fromRGB(230, 112, 126),
+	primary = VisualConfig.palette.blush,
+	accent = VisualConfig.palette.sky,
 }
 
 local DirectorPanel = {}

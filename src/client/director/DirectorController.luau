@@ -8,7 +8,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Net = require(Shared.Net)
 
-local DirectorPanel = require(script.Parent.DirectorPanel)
+local DirectorShell = require(script.Parent.DirectorShell)
 
 type Payload = { [string]: any }
 
@@ -30,7 +30,7 @@ function DirectorController.start()
 	started = true
 
 	local commandRemote = Net.get(Net.DirectorCommand)
-	local panel = DirectorPanel.new(function(action: string, payload: Payload?)
+	local panel = DirectorShell.new(function(action: string, payload: Payload?)
 		commandRemote:FireServer({ action = action, payload = payload })
 	end)
 
@@ -42,66 +42,44 @@ function DirectorController.start()
 		local event = message.event
 		local payload = payloadOf(message)
 		if event == "ShowState" then
-			panel.applyState(payload)
-		elseif event == "PhaseChanged" then
-			local phase = payload.phase
-			if type(phase) == "string" then
-				panel.setPhase(phase, nil)
-			end
-		elseif event == "MinigameStarted" then
-			local id = payload.id
-			if type(id) == "string" then
-				panel.setPhase("Minigame", id)
-			end
+			panel:applyState(payload)
+		elseif event == "TelemetrySample" then
+			panel:pushTelemetry(payload)
+		elseif event == "SignificantMoment" then
+			panel:pushMoment(payload)
+		elseif event == "DirectorCardPlayed" then
+			panel:cardPlayed(payload)
 		elseif event == "MinigameComplete" then
-			panel.setNotice("Bella completed the minigame. Back to the hub!", false)
+			panel:setNotice("Act complete. The result is authoritative.", false)
 		elseif event == "MinigameEnded" then
-			panel.setNotice("Minigame ended. The hub is ready for your next cue.", false)
+			panel:setNotice("The active round ended safely.", false)
 		elseif event == "MinigameFailed" then
-			panel.setNotice(
+			panel:setNotice(
 				"That minigame could not start. The show returned safely to the hub.",
 				true
 			)
-		elseif event == "DifficultyChanged" then
-			local level = payload.level
-			if type(level) == "number" then
-				panel.setDifficulty(level)
-			end
-		elseif event == "ScoreUpdate" then
-			local id = payload.id
-			local score = payload.score
-			local progress = if type(payload.data) == "table" then payload.data else nil
-			if type(id) == "string" and type(score) == "number" then
-				panel.setScore(id, score, progress)
-			end
-		elseif event == "StarConnectionChanged" then
-			local connected = payload.connected
-			local name = if type(payload.name) == "string" then payload.name else nil
-			if type(connected) == "boolean" then
-				panel.setStarConnection(connected, name)
-			end
 		elseif event == "CommandAccepted" then
 			local action = payload.action
 			local detail = if type(payload.detail) == "string" then payload.detail else nil
 			if type(action) == "string" then
-				panel.commandResult(action, true, detail)
+				panel:setNotice(`{action} accepted{if detail then ` · {detail}` else ""}`, false)
 			end
 		elseif event == "CommandRejected" then
 			local action = payload.action
 			local reason = payload.reason
 			if type(action) == "string" then
-				panel.commandResult(action, false, if type(reason) == "string" then reason else nil)
+				panel:setNotice(if type(reason) == "string" then reason else "Cue rejected", true)
 			end
 		elseif event == "DogsSummoned" then
 			local trick = payload.trick
-			panel.setNotice(
+			panel:setNotice(
 				if type(trick) == "string"
 					then `Gigi and Rambo are on cue: {trick}.`
 					else "Gigi and Rambo are on cue.",
 				false
 			)
 		elseif event == "MessageShown" then
-			panel.setNotice(
+			panel:setNotice(
 				if payload.studioPreview == true
 					then "Your Studio preview is now on Bella's screen."
 					else "Your filtered message is now on Bella's screen.",
@@ -109,21 +87,20 @@ function DirectorController.start()
 			)
 		elseif event == "SurpriseTriggered" then
 			local kind = payload.kind
-			panel.setNotice(
+			panel:setNotice(
 				if type(kind) == "string"
 					then `{kind} is live on Bella's screen.`
 					else "Surprise fired.",
 				false
 			)
 		elseif event == "FinaleStarted" then
-			panel.setPhase("Finale", nil)
-			panel.setNotice("Finale started. Let the moment breathe.", false)
+			panel:setNotice("Finale started. Let the moment breathe.", false)
 		elseif event == "FinaleBeat" then
 			local beat = payload.beat
 			if beat == "BroodingGuest" then
-				panel.setNotice("The brooding guest is stepping out of the shadows.", false)
+				panel:setNotice("The brooding guest is stepping out of the shadows.", false)
 			elseif beat == "HappyBirthday" then
-				panel.setNotice("Happy Birthday, Bella. The show is complete.", false)
+				panel:setNotice("Happy Birthday, Bella. The keepsake is next.", false)
 			end
 		end
 	end)

@@ -1,60 +1,36 @@
 --!strict
 
--- Server-authoritative finale set and timing. The client presenter only controls
--- Bella's camera and text; all shared world objects are created here.
+-- Server-authoritative cozy finale set and timing. The client owns camera/text only.
 
 local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
+local VisualConfig = require(Shared.VisualConfig)
+local DogBuilder = require(script.Parent.world.DogBuilder)
+local VisualKit = require(script.Parent.world.VisualKit)
 
 type Payload = { [string]: any }
 type Broadcast = (event: string, payload: Payload?) -> ()
-
 type LightingSnapshot = {
 	ambient: Color3,
 	brightness: number,
 	clockTime: number,
 	outdoorAmbient: Color3,
+	diffuse: number,
+	specular: number,
 }
 
+local P = VisualConfig.palette
 local FinaleService = {}
-
 local broadcast: Broadcast? = nil
 local finaleWorld: Folder? = nil
 local lightingSnapshot: LightingSnapshot? = nil
 local runToken = 0
-
-local function makePart(
-	parent: Instance,
-	name: string,
-	size: Vector3,
-	cf: CFrame,
-	color: Color3,
-	material: Enum.Material,
-	shape: Enum.PartType?
-): Part
-	local result = Instance.new("Part")
-	result.Name = name
-	result.Anchored = true
-	result.CanCollide = false
-	result.CanQuery = false
-	result.CanTouch = false
-	result.CastShadow = true
-	result.Color = color
-	result.Material = material
-	result.Shape = shape or Enum.PartType.Block
-	result.Size = size
-	result.CFrame = cf
-	result.TopSurface = Enum.SurfaceType.Smooth
-	result.BottomSurface = Enum.SurfaceType.Smooth
-	result.Parent = parent
-	return result
-end
 
 local function broadcastBeat(token: number, delaySeconds: number, beat: string)
 	task.delay(delaySeconds, function()
@@ -67,100 +43,131 @@ local function broadcastBeat(token: number, delaySeconds: number, beat: string)
 	end)
 end
 
-local function createDog(parent: Instance, name: string, color: Color3, cf: CFrame)
-	local body = makePart(
-		parent,
+local function weldedPiece(
+	model: Model,
+	root: BasePart,
+	name: string,
+	size: Vector3,
+	localCFrame: CFrame,
+	color: Color3,
+	material: Enum.Material,
+	shape: Enum.PartType?
+): Part
+	local part = VisualKit.part(
+		model,
 		name,
-		Vector3.new(2.5, 1.15, 3.5),
-		cf,
+		size,
+		root.CFrame * localCFrame,
 		color,
-		Enum.Material.SmoothPlastic,
-		Enum.PartType.Ball
+		material,
+		{ shape = shape }
 	)
-	makePart(
-		parent,
-		`{name}Head`,
-		Vector3.new(1.45, 1.35, 1.45),
-		body.CFrame * CFrame.new(0.2, 0.45, -1.55),
-		color,
-		Enum.Material.SmoothPlastic,
-		Enum.PartType.Ball
-	)
+	part.Anchored = false
+	part.Massless = true
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = root
+	weld.Part1 = part
+	weld.Parent = part
+	return part
 end
 
-local function createBroodingGuest(parent: Instance, center: CFrame): (BasePart, Model)
+local function createMaskedGuest(parent: Instance, center: CFrame): (BasePart, Model)
 	local model = Instance.new("Model")
-	model.Name = "BroodingGuest"
+	model.Name = "OriginalMaskedGuest"
 	model.Parent = parent
-	local root = makePart(
+	local root = VisualKit.part(
 		model,
-		"BatRobRoot",
-		Vector3.new(0.5, 0.5, 0.5),
-		center * CFrame.new(8, 2.5, -3),
-		Color3.new(0, 0, 0),
+		"GuestRoot",
+		Vector3.new(0.4, 0.4, 0.4),
+		center * CFrame.new(8.2, 2.65, -2.5),
+		P.night,
 		Enum.Material.SmoothPlastic,
-		nil
+		{ transparency = 1 }
 	)
-	root.Transparency = 1
 	model.PrimaryPart = root
-
-	makePart(
+	weldedPiece(
 		model,
-		"BroodingGuestBody",
-		Vector3.new(2.2, 4.2, 1.25),
-		root.CFrame,
-		Color3.fromRGB(22, 24, 31),
-		Enum.Material.SmoothPlastic,
-		nil
-	)
-	makePart(
-		model,
-		"BroodingGuestCape",
-		Vector3.new(4.7, 5.2, 0.35),
-		root.CFrame * CFrame.new(0, -0.25, 0.72),
-		Color3.fromRGB(14, 15, 21),
+		root,
+		"Coat",
+		Vector3.new(2.3, 4.3, 1.3),
+		CFrame.new(),
+		Color3.fromRGB(35, 37, 48),
 		Enum.Material.Fabric,
-		nil
+		Enum.PartType.Block
 	)
-	local head = makePart(
+	weldedPiece(
 		model,
-		"BroodingGuestMask",
-		Vector3.new(1.65, 1.8, 1.45),
-		root.CFrame * CFrame.new(0, 2.9, 0),
-		Color3.fromRGB(30, 32, 40),
-		Enum.Material.SmoothPlastic,
-		nil
+		root,
+		"Cape",
+		Vector3.new(4.5, 5.15, 0.28),
+		CFrame.new(0, -0.25, 0.72),
+		Color3.fromRGB(20, 21, 29),
+		Enum.Material.Fabric,
+		Enum.PartType.Block
 	)
-	makePart(
+	weldedPiece(
 		model,
-		"LeftEar",
-		Vector3.new(0.35, 1.2, 0.45),
-		head.CFrame * CFrame.new(-0.52, 1.15, 0),
-		Color3.fromRGB(25, 27, 34),
+		root,
+		"ShoulderLeft",
+		Vector3.new(1.3, 0.7, 1.45),
+		CFrame.new(-1.25, 1.45, 0),
+		Color3.fromRGB(29, 31, 41),
 		Enum.Material.SmoothPlastic,
-		nil
+		Enum.PartType.Ball
 	)
-	makePart(
+	weldedPiece(
 		model,
-		"RightEar",
-		Vector3.new(0.35, 1.2, 0.45),
-		head.CFrame * CFrame.new(0.52, 1.15, 0),
-		Color3.fromRGB(25, 27, 34),
+		root,
+		"ShoulderRight",
+		Vector3.new(1.3, 0.7, 1.45),
+		CFrame.new(1.25, 1.45, 0),
+		Color3.fromRGB(29, 31, 41),
 		Enum.Material.SmoothPlastic,
-		nil
+		Enum.PartType.Ball
+	)
+	local head = CFrame.new(0, 2.9, 0)
+	weldedPiece(
+		model,
+		root,
+		"Mask",
+		Vector3.new(1.7, 1.85, 1.5),
+		head,
+		Color3.fromRGB(42, 44, 56),
+		Enum.Material.SmoothPlastic,
+		Enum.PartType.Ball
 	)
 	for side = -1, 1, 2 do
-		makePart(
+		weldedPiece(
 			model,
+			root,
+			if side == -1 then "LeftMaskPoint" else "RightMaskPoint",
+			Vector3.new(0.38, 1.15, 0.48),
+			head * CFrame.new(side * 0.5, 1.1, 0) * CFrame.Angles(0, 0, math.rad(side * 7)),
+			Color3.fromRGB(34, 36, 46),
+			Enum.Material.SmoothPlastic,
+			Enum.PartType.Block
+		)
+		weldedPiece(
+			model,
+			root,
 			if side == -1 then "LeftEye" else "RightEye",
-			Vector3.new(0.32, 0.14, 0.08),
-			head.CFrame * CFrame.new(side * 0.38, 0.1, -0.75),
-			Color3.fromRGB(192, 221, 255),
+			Vector3.new(0.34, 0.13, 0.08),
+			head * CFrame.new(side * 0.37, 0.12, -0.73),
+			Color3.fromRGB(188, 217, 230),
 			Enum.Material.Neon,
-			nil
+			Enum.PartType.Block
 		)
 	end
-
+	weldedPiece(
+		model,
+		root,
+		"Brooch",
+		Vector3.new(0.42, 0.42, 0.16),
+		CFrame.new(0, 1.25, -0.7),
+		P.butter,
+		Enum.Material.Metal,
+		Enum.PartType.Ball
+	)
 	return root, model
 end
 
@@ -171,19 +178,26 @@ local function applyFinaleLighting()
 			brightness = Lighting.Brightness,
 			clockTime = Lighting.ClockTime,
 			outdoorAmbient = Lighting.OutdoorAmbient,
+			diffuse = Lighting.EnvironmentDiffuseScale,
+			specular = Lighting.EnvironmentSpecularScale,
 		}
 	end
-	Lighting.Ambient = Color3.fromRGB(24, 28, 45)
-	Lighting.Brightness = 1.15
-	Lighting.ClockTime = 23.3
-	Lighting.OutdoorAmbient = Color3.fromRGB(35, 42, 64)
-end
-
-local function clearFinale()
-	runToken += 1
-	if finaleWorld then
-		finaleWorld:Destroy()
-		finaleWorld = nil
+	Lighting.Ambient = Color3.fromRGB(31, 34, 52)
+	Lighting.Brightness = VisualConfig.lighting.finaleBrightness
+	Lighting.ClockTime = VisualConfig.lighting.finaleClockTime
+	Lighting.EnvironmentDiffuseScale = 0.3
+	Lighting.EnvironmentSpecularScale = 0.5
+	Lighting.OutdoorAmbient = Color3.fromRGB(43, 49, 68)
+	local color = Lighting:FindFirstChild("BirthdayColor")
+	if color and color:IsA("ColorCorrectionEffect") then
+		color.TintColor = Color3.fromRGB(218, 224, 244)
+		color.Contrast = 0.12
+		color.Saturation = -0.06
+	end
+	local bloom = Lighting:FindFirstChild("BirthdayBloom")
+	if bloom and bloom:IsA("BloomEffect") then
+		bloom.Intensity = 0.3
+		bloom.Threshold = 1.1
 	end
 end
 
@@ -196,7 +210,199 @@ local function restoreLighting()
 	Lighting.Brightness = snapshot.brightness
 	Lighting.ClockTime = snapshot.clockTime
 	Lighting.OutdoorAmbient = snapshot.outdoorAmbient
+	Lighting.EnvironmentDiffuseScale = snapshot.diffuse
+	Lighting.EnvironmentSpecularScale = snapshot.specular
+	local color = Lighting:FindFirstChild("BirthdayColor")
+	if color and color:IsA("ColorCorrectionEffect") then
+		color.TintColor = Color3.fromRGB(255, 237, 229)
+		color.Contrast = 0.06
+		color.Saturation = 0.08
+	end
+	local bloom = Lighting:FindFirstChild("BirthdayBloom")
+	if bloom and bloom:IsA("BloomEffect") then
+		bloom.Intensity = 0.18
+		bloom.Threshold = 1.35
+	end
 	lightingSnapshot = nil
+end
+
+local function clearFinale()
+	runToken += 1
+	if finaleWorld then
+		finaleWorld:Destroy()
+		finaleWorld = nil
+	end
+end
+
+local function addWindow(parent: Instance, center: CFrame)
+	local windowCf = center * CFrame.new(0, 5, 6)
+	local glass = VisualKit.part(
+		parent,
+		"RainWindow",
+		Vector3.new(12, 8.5, 0.35),
+		windowCf,
+		P.rain,
+		Enum.Material.Glass,
+		{ transparency = 0.3 }
+	)
+	glass.Reflectance = 0.06
+	for x = -1, 1 do
+		VisualKit.part(
+			parent,
+			`WindowMullion{x + 2}`,
+			Vector3.new(0.28, 8.8, 0.5),
+			windowCf * CFrame.new(x * 4, 0, -0.1),
+			P.walnut,
+			Enum.Material.Wood,
+			nil
+		)
+	end
+	VisualKit.part(
+		parent,
+		"WindowCrossbar",
+		Vector3.new(12.3, 0.3, 0.5),
+		windowCf * CFrame.new(0, 0.4, -0.1),
+		P.walnut,
+		Enum.Material.Wood,
+		nil
+	)
+	VisualKit.part(
+		parent,
+		"WindowSill",
+		Vector3.new(13, 0.55, 1.2),
+		windowCf * CFrame.new(0, -4.5, -0.25),
+		P.wood,
+		Enum.Material.Wood,
+		nil
+	)
+	for streak = 1, 14 do
+		local x = -5.5 + ((streak * 2.37) % 11)
+		local y = -3.2 + ((streak * 1.83) % 6.5)
+		local rain = VisualKit.part(
+			parent,
+			`RainStreak{streak}`,
+			Vector3.new(0.035, 0.75 + (streak % 3) * 0.35, 0.04),
+			windowCf * CFrame.new(x, y, -0.22) * CFrame.Angles(0, 0, math.rad(-8)),
+			Color3.fromRGB(194, 221, 235),
+			Enum.Material.Neon,
+			{ transparency = 0.42, castShadow = false }
+		)
+		TweenService:Create(
+			rain,
+			TweenInfo.new(
+				1.5 + (streak % 4) * 0.2,
+				Enum.EasingStyle.Linear,
+				Enum.EasingDirection.In,
+				-1
+			),
+			{ CFrame = rain.CFrame * CFrame.new(0, -2.2, 0), Transparency = 0.8 }
+		):Play()
+	end
+end
+
+local function addSetDressing(parent: Instance, center: CFrame)
+	VisualKit.part(
+		parent,
+		"FinaleFloor",
+		Vector3.new(26, 0.55, 18),
+		center * CFrame.new(0, -0.38, 0),
+		P.walnut,
+		Enum.Material.WoodPlanks,
+		{ canCollide = false }
+	)
+	VisualKit.part(
+		parent,
+		"FinaleRug",
+		Vector3.new(20, 0.18, 13),
+		center,
+		P.plumDeep,
+		Enum.Material.Fabric,
+		nil
+	)
+	VisualKit.part(
+		parent,
+		"RugBorder",
+		Vector3.new(18.6, 0.06, 11.6),
+		center * CFrame.new(0, 0.12, 0),
+		P.plum,
+		Enum.Material.Fabric,
+		nil
+	)
+	VisualKit.part(
+		parent,
+		"FinaleBackWall",
+		Vector3.new(26, 12, 0.6),
+		center * CFrame.new(0, 5.5, 6.35),
+		P.night,
+		Enum.Material.Plaster,
+		nil
+	)
+	addWindow(parent, center)
+
+	VisualKit.part(
+		parent,
+		"LowSofaBase",
+		Vector3.new(9, 1.15, 3),
+		center * CFrame.new(-5.5, 0.7, 2.8),
+		P.sky:Lerp(P.plum, 0.35),
+		Enum.Material.Fabric,
+		nil
+	)
+	VisualKit.part(
+		parent,
+		"LowSofaBack",
+		Vector3.new(9, 2.5, 0.7),
+		center * CFrame.new(-5.5, 1.75, 4),
+		P.sky:Lerp(P.plum, 0.42),
+		Enum.Material.Fabric,
+		nil
+	)
+	for index = -1, 1 do
+		VisualKit.part(
+			parent,
+			`FinaleCushion{index + 2}`,
+			Vector3.new(2.45, 0.42, 2.25),
+			center * CFrame.new(-5.5 + index * 2.65, 1.28, 2.65),
+			P.cream:Lerp(if index == 0 then P.blush else P.sky, 0.17),
+			Enum.Material.Fabric,
+			nil
+		)
+	end
+	VisualKit.part(
+		parent,
+		"KnittedThrow",
+		Vector3.new(3.2, 0.12, 3.5),
+		center * CFrame.new(-7.8, 1.55, 2.6) * CFrame.Angles(0, 0, math.rad(5)),
+		P.blush,
+		Enum.Material.Fabric,
+		nil
+	)
+
+	for index = 1, 8 do
+		local x = -10.5 + index * 2.35
+		local z = if index % 2 == 0 then 5.15 else -5.4
+		local candle = VisualKit.cylinder(
+			parent,
+			`FinaleCandle{index}`,
+			0.7 + (index % 3) * 0.18,
+			0.22,
+			center * CFrame.new(x, 0.52, z) * CFrame.Angles(0, 0, math.rad(90)),
+			P.cream,
+			Enum.Material.SmoothPlastic,
+			nil
+		)
+		local flame = VisualKit.ball(
+			parent,
+			`FinaleFlame{index}`,
+			Vector3.new(0.23, 0.36, 0.23),
+			candle.CFrame * CFrame.new(0, candle.Size.X * 0.72, 0),
+			P.flame,
+			Enum.Material.Neon
+		)
+		if index % 2 == 0 then
+			VisualKit.pointLight(flame, P.flame, 0.65, 6)
+		end
+	end
 end
 
 function FinaleService.start(broadcastEvent: Broadcast)
@@ -213,100 +419,53 @@ function FinaleService.begin(star: Player?): (boolean, string?)
 	if not humanoidRoot or not humanoidRoot:IsA("BasePart") then
 		return false, "Bella's character is not ready"
 	end
-
 	clearFinale()
 	runToken += 1
 	local token = runToken
 	applyFinaleLighting()
-
 	local folder = Instance.new("Folder")
 	folder.Name = "BirthdayFinale"
 	folder.Parent = Workspace
 	finaleWorld = folder
-
 	local center = humanoidRoot.CFrame * CFrame.new(0, -2.5, -10)
-	local floor = makePart(
+	addSetDressing(folder, center)
+	DogBuilder.create(
 		folder,
-		"CozyFinaleRug",
-		Vector3.new(22, 0.25, 14),
-		center,
-		Color3.fromRGB(47, 38, 65),
-		Enum.Material.Fabric,
-		nil
+		Config.dogs[1].name,
+		Config.dogs[1].color,
+		center * CFrame.new(-1.2, 0.75, 0.3),
+		{ pose = "Curled", accessoryColor = P.blush, showName = false }
 	)
-	local window = makePart(
+	DogBuilder.create(
 		folder,
-		"Window",
-		Vector3.new(11, 8, 0.5),
-		center * CFrame.new(0, 4.5, 5.8),
-		Color3.fromRGB(33, 46, 69),
-		Enum.Material.Glass,
-		nil
+		Config.dogs[2].name,
+		Config.dogs[2].color,
+		center * CFrame.new(1.4, 0.75, 0.4) * CFrame.Angles(0, math.rad(20), 0),
+		{ pose = "Curled", accessoryColor = P.sky, showName = false }
 	)
-	window.Transparency = 0.25
 
-	for index = 1, 10 do
-		local candle = makePart(
-			folder,
-			`FinaleCandle{index}`,
-			Vector3.new(0.22, 0.75 + (index % 3) * 0.2, 0.22),
-			center * CFrame.new(-9 + index * 1.7, 0.5, if index % 2 == 0 then 5 else -5),
-			Color3.fromRGB(255, 235, 211),
-			Enum.Material.SmoothPlastic,
-			nil
-		)
-		local flame = makePart(
-			folder,
-			`FinaleFlame{index}`,
-			Vector3.new(0.24, 0.38, 0.24),
-			candle.CFrame * CFrame.new(0, candle.Size.Y * 0.65, 0),
-			Color3.fromRGB(255, 191, 90),
-			Enum.Material.Neon,
-			Enum.PartType.Ball
-		)
-		local light = Instance.new("PointLight")
-		light.Brightness = 1.2
-		light.Color = flame.Color
-		light.Range = 7
-		light.Parent = flame
-	end
+	local guestRoot = createMaskedGuest(folder, center)
+	TweenService:Create(
+		guestRoot,
+		TweenInfo.new(4.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, 4.5),
+		{ CFrame = center * CFrame.new(6.5, 2.65, 1) }
+	):Play()
 
-	createDog(folder, Config.dogs[1].name, Config.dogs[1].color, center * CFrame.new(-2, 0.8, 1))
-	createDog(folder, Config.dogs[2].name, Config.dogs[2].color, center * CFrame.new(2, 0.8, 1))
-
-	local guestRoot, guestModel = createBroodingGuest(folder, center)
-	local guestParts: { BasePart } = {}
-	for _, child in guestModel:GetDescendants() do
-		if child:IsA("BasePart") then
-			table.insert(guestParts, child)
-		end
-	end
-	local guestTarget = center * CFrame.new(6, 2.5, 1)
-	local worldDelta = guestTarget * guestRoot.CFrame:Inverse()
-	for _, guestPart in guestParts do
-		TweenService:Create(
-			guestPart,
-			TweenInfo.new(4.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, 4.5),
-			{ CFrame = worldDelta * guestPart.CFrame }
-		):Play()
-	end
-
-	local focus = makePart(
+	local focus = VisualKit.part(
 		folder,
 		"FinaleFocus",
-		Vector3.new(1, 1, 1),
-		floor.CFrame * CFrame.new(0, 2.5, 0),
+		Vector3.one,
+		center * CFrame.new(0, 2.5, 0),
 		Color3.new(1, 1, 1),
 		Enum.Material.SmoothPlastic,
-		nil
+		{ transparency = 1 }
 	)
-	focus.Transparency = 1
-
+	focus.CanQuery = false
 	if broadcast then
-		broadcast("FinaleStarted", {
-			messageLines = Config.finaleMessage,
-			starName = Config.starName,
-		})
+		broadcast(
+			"FinaleStarted",
+			{ messageLines = Config.finaleMessage, starName = Config.starName }
+		)
 	end
 	broadcastBeat(token, 0.8, "LightsDimmed")
 	broadcastBeat(token, 3.5, "Message")

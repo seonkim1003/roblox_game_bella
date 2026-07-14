@@ -7,16 +7,20 @@
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Net = require(Shared.Net)
 local ContractValidation = require(Shared.ContractValidation)
 local ShowConstants = require(Shared.ShowConstants)
+local TelemetryMock = require(Shared.TelemetryMock)
 local Types = require(Shared.Types)
 
 local RoleService = require(script.Parent.RoleService)
 local FinaleService = require(script.Parent.FinaleService)
+local DirectorStrategy = require(script.Parent.DirectorStrategy)
 local ShowState = require(script.Parent.ShowState)
+local ShowSession = require(script.Parent.ShowSession)
 local SurpriseService = require(script.Parent.SurpriseService)
 local HubBuilder = require(script.Parent.world.HubBuilder)
 local TokenBucket = require(script.Parent.TokenBucket)
@@ -28,6 +32,7 @@ local MAX_MESSAGE_BYTES = 600
 local MAX_SCORE = 1_000_000_000
 local MAX_PROGRESS_FIELDS = 12
 local RECONNECT_GRACE_SECONDS = 20
+local ACT_COUNT = #ShowConstants.MinigameOrder
 
 local ACTION_INTERVALS: { [string]: number } = {
 	DirectorIngress = 0.01,
@@ -43,12 +48,22 @@ local ACTION_INTERVALS: { [string]: number } = {
 	RoundInput = 0.02,
 	Telemetry = 0.2,
 	RoundReady = 0.5,
+	ChooseMood = 0.5,
+	SkipCinematic = 0.5,
+	AdvanceShow = 0.5,
+	UseCard = 0.2,
+	Predict = 0.5,
+	RequestEncore = 1,
+	ReplayShow = 2,
 }
 
 local ShowDirectorService = {}
 
 local state: ShowState.State = ShowState.new(ShowConstants.DefaultDifficulty)
 local sessionId = HttpService:GenerateGUID(false)
+local session: ShowSession.State = ShowSession.new(sessionId, workspace:GetServerTimeNow())
+local strategy: DirectorStrategy.State =
+	DirectorStrategy.new(Random.new():NextInteger(1, 2_147_483_647), workspace:GetServerTimeNow())
 local minigames: { [string]: Types.MinigameServer } = {}
 local activeMinigame: Types.MinigameServer? = nil
 local activeRoundConfig: Types.RoundConfig? = nil
@@ -56,7 +71,11 @@ local activeRunToken = 0
 local requestBuckets: { [Player]: { [string]: TokenBucket.Bucket } } = {}
 local lastInputSequence: { [Player]: number } = {}
 local abandonToken = 0
+local lastSignificantMomentAt: number? = nil
+local lastShowrunnerAt = 0
 local started = false
+local advancePremiere: (reason: string) -> (boolean, string?)
+local debugSeedOverride: number? = nil
 
 local function sendEvent(player: Player, event: string, payload: Payload?)
 	if player.Parent ~= Players then
@@ -96,7 +115,8 @@ local function statePayload(reason: string): Payload
 	local star = RoleService.getStar()
 	local director = RoleService.getDirector()
 	return {
-		phase = state.phase,
+		phase = session.phase,
+		legacyPhase = state.phase,
 		difficulty = state.difficulty,
 		activeMinigame = state.activeMinigame,
 		sessionId = sessionId,
@@ -107,10 +127,21 @@ local function statePayload(reason: string): Payload
 		availableMinigames = availableMinigames(),
 		runId = if activeMinigame then activeRunToken else nil,
 		reason = reason,
+		session = ShowSession.snapshot(session),
+		director = {
+			energy = strategy.energy,
+			finaleEnergy = strategy.finaleEnergy,
+			hand = DirectorStrategy.handView(strategy, session.phase, state.activeMinigame),
+			prediction = strategy.prediction,
+			predictionResolved = strategy.predictionResolved,
+			cueGrade = DirectorStrategy.cueGrade(strategy),
+			showrunnerFallback = director == nil,
+		},
 	}
 end
 
 local function publishState(reason: string)
+	strategy = DirectorStrategy.tick(strategy, workspace:GetServerTimeNow())
 	broadcast("ShowState", statePayload(reason))
 
 	local director = RoleService.getDirector()
@@ -169,6 +200,49 @@ local function stopActiveMinigame()
 	end
 end
 
+local function authoritativeResult(
+	roundConfig: Types.RoundConfig,
+	rawResult: Payload?
+): ShowSession.Result
+	local score = if rawResult and type(rawResult.score) == "number" then rawResult.score else 0
+	if not isFinite(score) then
+		score = 0
+	end
+	score = math.clamp(math.round(score), 0, MAX_SCORE)
+	local grade = if rawResult and type(rawResult.grade) == "string" then rawResult.grade else nil
+	if grade ~= "S" and grade ~= "A" and grade ~= "B" and grade ~= "C" and grade ~= "D" then
+		grade = if score >= 900
+			then "S"
+			elseif score >= 750 then "A"
+			elseif score >= 550 then "B"
+			elseif score >= 300 then "C"
+			else "D"
+	end
+	local metrics: { [string]: number } = {}
+	local rawMetrics = if rawResult and type(rawResult.metrics) == "table"
+		then rawResult.metrics
+		else nil
+	if rawMetrics then
+		for key, value in rawMetrics do
+			if
+				type(key) == "string"
+				and #key <= 32
+				and type(value) == "number"
+				and isFinite(value)
+			then
+				metrics[key] = value
+			end
+		end
+	end
+	return {
+		roundId = roundConfig.roundId,
+		gameId = roundConfig.gameId,
+		score = score,
+		grade = grade :: string,
+		metrics = metrics,
+	}
+end
+
 local function buildContext(
 	minigame: Types.MinigameServer,
 	runToken: number,
@@ -194,7 +268,10 @@ local function buildContext(
 			if activeRunToken ~= runToken or moment.roundId ~= roundConfig.roundId then
 				return
 			end
+			lastSignificantMomentAt = moment.serverTime
+			strategy = DirectorStrategy.resolvePrediction(strategy, moment.kind)
 			broadcast("SignificantMoment", moment :: any)
+			publishState("SignificantMoment")
 		end,
 		complete = function(result: Payload?)
 			if activeMinigame ~= minigame or activeRunToken ~= runToken then
@@ -202,6 +279,7 @@ local function buildContext(
 			end
 
 			local completedId = minigame.id
+			local finalResult = authoritativeResult(roundConfig, result)
 			stopActiveMinigame()
 			local transition = ShowState.transition(state, "MinigameComplete", { id = completedId })
 			if transition.error then
@@ -209,13 +287,30 @@ local function buildContext(
 				return
 			end
 			state = transition.state
+			local sessionTransition =
+				ShowSession.completeAct(session, finalResult, workspace:GetServerTimeNow())
+			if sessionTransition.error then
+				warn(`[Bash] Session completion rejected: {sessionTransition.error}`)
+			else
+				session = sessionTransition.state
+			end
 			broadcast("MinigameComplete", {
 				id = completedId,
 				roundId = roundConfig.roundId,
-				result = result,
+				result = finalResult,
 			})
-			broadcast("PhaseChanged", { phase = state.phase })
+			broadcast("PhaseChanged", { phase = session.phase })
+			broadcast(
+				"PremierePhaseChanged",
+				{ phase = session.phase, revision = session.revision }
+			)
 			publishState("MinigameComplete")
+			local resultRevision = session.revision
+			task.delay(6, function()
+				if session.phase == "ActResult" and session.revision == resultRevision then
+					advancePremiere("ActResultComplete")
+				end
+			end)
 		end,
 	}
 end
@@ -271,9 +366,17 @@ local function launchMinigame(player: Player, id: string)
 		reject(player, "LaunchMinigame", "Bella is not connected")
 		return
 	end
+	local previousSession = session
+	local sessionTransition = ShowSession.beginAct(session, workspace:GetServerTimeNow())
+	if sessionTransition.error or session.activeGameId ~= id then
+		reject(player, "LaunchMinigame", sessionTransition.error or "That act is not introduced")
+		return
+	end
+	session = sessionTransition.state
 
 	local transition = ShowState.transition(state, "LaunchMinigame", { id = id })
 	if transition.error then
+		session = previousSession
 		reject(player, "LaunchMinigame", transition.error)
 		return
 	end
@@ -287,14 +390,16 @@ local function launchMinigame(player: Player, id: string)
 		sessionId = sessionId,
 		roundId = HttpService:GenerateGUID(false),
 		gameId = id :: Types.MinigameId,
-		seed = Random.new():NextInteger(1, 2_147_483_647),
+		seed = debugSeedOverride or Random.new():NextInteger(1, 2_147_483_647),
 		difficulty = state.difficulty,
 		modifiers = {},
 	}
+	debugSeedOverride = nil
 	activeRoundConfig = roundConfig
 	table.clear(lastInputSequence)
 
-	broadcast("PhaseChanged", { phase = state.phase })
+	broadcast("PhaseChanged", { phase = session.phase })
+	broadcast("PremierePhaseChanged", { phase = session.phase, revision = session.revision })
 	broadcast("MinigameStarted", {
 		id = id,
 		difficulty = state.difficulty,
@@ -345,11 +450,98 @@ local function validateMessage(rawText: any): (string?, string?)
 	return text, nil
 end
 
+local function queueAct(player: Player, requestedId: string): (boolean, string?)
+	local expectedId = ShowConstants.MinigameOrder[session.actIndex + 1]
+	if expectedId == nil then
+		return false, "All acts are complete"
+	end
+	if requestedId ~= expectedId then
+		return false, `The next act is {expectedId}`
+	end
+	local transition = ShowSession.introduceAct(session, requestedId, workspace:GetServerTimeNow())
+	if transition.error then
+		return false, transition.error
+	end
+	session = transition.state
+	broadcast("ActIntroduction", {
+		gameId = requestedId,
+		actIndex = session.actIndex,
+		totalActs = ACT_COUNT,
+	})
+	publishState("ActIntroduction")
+	local revision = session.revision
+	task.delay(4, function()
+		if session.phase == "ActIntroduction" and session.revision == revision then
+			launchMinigame(player, requestedId)
+		end
+	end)
+	return true, nil
+end
+
+local function startHeadlinerFinale(): (boolean, string?)
+	if session.phase ~= "HeadlinerFinale" then
+		return false, "Complete all three acts first"
+	end
+	local star = RoleService.getStar()
+	if not star then
+		return false, "Bella is not connected"
+	end
+	local transition = ShowState.transition(state, "StartFinale", nil)
+	if transition.error then
+		return false, transition.error
+	end
+	local previousState = state
+	state = transition.state
+	local success, finaleStarted, reason = pcall(function()
+		local didBegin, finaleReason = FinaleService.begin(star)
+		return didBegin, finaleReason
+	end)
+	if not success or not finaleStarted then
+		state = previousState
+		FinaleService.cancel()
+		return false,
+			if success and type(reason) == "string" then reason else "The finale could not start"
+	end
+	broadcast("PhaseChanged", { phase = session.phase })
+	publishState("StartFinale")
+	return true, nil
+end
+
+advancePremiere = function(reason: string): (boolean, string?)
+	local transition = ShowSession.advance(session, ACT_COUNT, workspace:GetServerTimeNow())
+	if transition.error then
+		return false, transition.error
+	end
+	session = transition.state
+	broadcast("PremierePhaseChanged", { phase = session.phase, revision = session.revision })
+	publishState(reason)
+	if session.phase == "Interlude" then
+		local expectedId = ShowConstants.MinigameOrder[session.actIndex + 1]
+		broadcast("InterludeStarted", { nextGameId = expectedId, duration = 6 })
+		local revision = session.revision
+		task.delay(6, function()
+			if session.phase ~= "Interlude" or session.revision ~= revision or not expectedId then
+				return
+			end
+			local owner = RoleService.getDirector() or RoleService.getStar()
+			if owner then
+				queueAct(owner, expectedId)
+			end
+		end)
+	elseif session.phase == "HeadlinerFinale" then
+		broadcast("HeadlinerReady", { finaleEnergy = strategy.finaleEnergy })
+		local revision = session.revision
+		task.delay(2, function()
+			if session.phase == "HeadlinerFinale" and session.revision == revision then
+				startHeadlinerFinale()
+			end
+		end)
+	end
+	return true, nil
+end
+
 local function handleCommand(player: Player, command: any)
 	if not consumeRateLimit(player, "DirectorIngress") then
-		return
-	end
-	if RoleService.roleOf(player) ~= "Director" then
 		return
 	end
 	local bounded = ContractValidation.isBoundedPayload(command)
@@ -373,7 +565,191 @@ local function handleCommand(player: Player, command: any)
 	end
 
 	local payload = if type(command.payload) == "table" then command.payload else nil
-	if action == "StartHub" then
+	local role = RoleService.roleOf(player)
+	if action == "ChooseMood" then
+		if role ~= "Star" then
+			reject(player, action, "Only Bella chooses the Premiere mood")
+			return
+		end
+		local mood = if payload then payload.mood else nil
+		if type(mood) ~= "string" then
+			reject(player, action, "Choose Cozy, Playful, or Dreamy")
+			return
+		end
+		local transition = ShowSession.chooseMood(session, mood, workspace:GetServerTimeNow())
+		if transition.error then
+			reject(player, action, transition.error)
+			return
+		end
+		local hubTransition = ShowState.transition(state, "StartHub", nil)
+		if hubTransition.error then
+			reject(player, action, hubTransition.error)
+			return
+		end
+		state = hubTransition.state
+		session = transition.state
+		broadcast("MoodChosen", { mood = session.mood })
+		publishState("MoodChosen")
+		accept(player, action, mood)
+		return
+	elseif action == "SkipCinematic" then
+		if role ~= "Director" and role ~= "Star" then
+			return
+		end
+		if session.phase == "HeadlinerFinale" then
+			local transition =
+				ShowSession.confirmFinaleSkip(session, role, workspace:GetServerTimeNow())
+			if transition.error then
+				reject(player, action, transition.error)
+				return
+			end
+			local reachedKeepsake = transition.state.phase == "KeepsakeResult"
+			session = transition.state
+			broadcast("FinaleSkipConfirmed", {
+				role = role,
+				complete = reachedKeepsake,
+			})
+			if reachedKeepsake then
+				FinaleService.cancel()
+				broadcast("KeepsakeResult", { session = ShowSession.snapshot(session) })
+			end
+			publishState("FinaleSkipConfirmed")
+			accept(player, action)
+			return
+		elseif session.phase == "ActIntroduction" then
+			local id = session.activeGameId
+			if not id then
+				reject(player, action, "No act is ready")
+				return
+			end
+			launchMinigame(player, id)
+			return
+		elseif session.phase == "ActResult" then
+			local success, reason = advancePremiere("ResultSkipped")
+			if not success then
+				reject(player, action, reason or "Cannot skip")
+			else
+				accept(player, action)
+			end
+			return
+		elseif session.phase == "Interlude" then
+			local id = ShowConstants.MinigameOrder[session.actIndex + 1]
+			if not id then
+				reject(player, action, "No act remains")
+				return
+			end
+			local success, reason = queueAct(player, id)
+			if not success then
+				reject(player, action, reason or "Cannot skip")
+			else
+				accept(player, action)
+			end
+			return
+		end
+		reject(player, action, "This moment is not skippable")
+		return
+	elseif action == "RequestEncore" then
+		if role ~= "Star" then
+			reject(player, action, "Only Bella can request an encore")
+			return
+		end
+		local transition = ShowSession.requestEncore(session)
+		if transition.error then
+			reject(player, action, transition.error)
+			return
+		end
+		session = transition.state
+		strategy = DirectorStrategy.requestEncore(strategy)
+		broadcast("EncoreRequested", {})
+		publishState("EncoreRequested")
+		accept(player, action)
+		return
+	elseif action == "ReplayShow" then
+		if role ~= "Director" and role ~= "Star" then
+			return
+		end
+		local transition = ShowSession.replay(session, workspace:GetServerTimeNow())
+		if transition.error then
+			reject(player, action, transition.error)
+			return
+		end
+		FinaleService.cancel()
+		state = ShowState.transition(ShowState.new(state.difficulty), "StartHub", nil).state
+		session = transition.state
+		strategy = DirectorStrategy.new(
+			Random.new():NextInteger(1, 2_147_483_647),
+			workspace:GetServerTimeNow()
+		)
+		broadcast("ReplayStarted", { mood = session.mood })
+		publishState("ReplayStarted")
+		accept(player, action)
+		return
+	end
+
+	if role ~= "Director" then
+		return
+	end
+	if action == "UseCard" then
+		local cardId = if payload then payload.cardId else nil
+		if type(cardId) ~= "string" then
+			reject(player, action, "Choose a cue card")
+			return
+		end
+		local play = DirectorStrategy.play(
+			strategy,
+			cardId :: any,
+			session.phase,
+			state.activeMinigame,
+			workspace:GetServerTimeNow(),
+			lastSignificantMomentAt
+		)
+		strategy = play.state
+		if not play.accepted then
+			reject(player, action, play.reason or "That cue is unavailable")
+			return
+		end
+		broadcast("DirectorCardPlayed", play.effect)
+		publishState("DirectorCardPlayed")
+		accept(player, action, cardId)
+		return
+	elseif action == "Predict" then
+		local prediction = if payload then payload.moment else nil
+		if type(prediction) ~= "string" then
+			reject(player, action, "Choose a prediction")
+			return
+		end
+		strategy = DirectorStrategy.predict(strategy, prediction)
+		publishState("DirectorPrediction")
+		accept(player, action, prediction)
+		return
+	elseif action == "AdvanceShow" then
+		local id = ShowConstants.MinigameOrder[session.actIndex + 1]
+		if not id then
+			reject(player, action, "All acts are complete")
+			return
+		end
+		local success, reason = queueAct(player, id)
+		if not success then
+			reject(player, action, reason or "The next act is not ready")
+		else
+			accept(player, action, id)
+		end
+		return
+	elseif action == "StartHub" then
+		if session.phase == "Lobby" then
+			local invitation = ShowSession.openInvitation(session, workspace:GetServerTimeNow())
+			if invitation.error then
+				reject(player, action, invitation.error)
+				return
+			end
+			session = invitation.state
+			broadcast("PlayableInvitation", {
+				moods = { "Cozy", "Playful", "Dreamy" },
+			})
+			publishState("InvitationOpened")
+			accept(player, action)
+			return
+		end
 		local transition = ShowState.transition(state, action, payload)
 		if transition.error then
 			reject(player, action, transition.error)
@@ -389,7 +765,12 @@ local function handleCommand(player: Player, command: any)
 			reject(player, action, "Choose a game to launch")
 			return
 		end
-		launchMinigame(player, id)
+		local success, reason = queueAct(player, id)
+		if not success then
+			reject(player, action, reason or "That act is not ready")
+		else
+			accept(player, action, id)
+		end
 	elseif action == "EndMinigame" then
 		local transition = ShowState.transition(state, action, payload)
 		if transition.error then
@@ -476,43 +857,12 @@ local function handleCommand(player: Player, command: any)
 		end
 		accept(player, action, kind)
 	elseif action == "StartFinale" then
-		local star = RoleService.getStar()
-		if not star then
-			reject(player, action, "Bella is not connected")
-			return
+		local success, reason = startHeadlinerFinale()
+		if not success then
+			reject(player, action, reason or "The finale could not start")
+		else
+			accept(player, action)
 		end
-		local transition = ShowState.transition(state, action, payload)
-		if transition.error then
-			reject(player, action, transition.error)
-			return
-		end
-
-		local previousState = state
-		state = transition.state
-		local success, finaleStarted, reason = pcall(function()
-			local didBegin, finaleReason = FinaleService.begin(star)
-			return didBegin, finaleReason
-		end)
-		if not success or not finaleStarted then
-			state = previousState
-			FinaleService.cancel()
-			warn(
-				`[Bash] Failed to start finale: {tostring(if success then reason else finaleStarted)}`
-			)
-			publishState("FinaleFailed")
-			reject(
-				player,
-				action,
-				if success and type(reason) == "string"
-					then reason
-					else "The finale could not start"
-			)
-			return
-		end
-
-		broadcast("PhaseChanged", { phase = state.phase })
-		publishState("StartFinale")
-		accept(player, action)
 	end
 end
 
@@ -662,6 +1012,19 @@ function ShowDirectorService.start()
 	SurpriseService.start(broadcast)
 	FinaleService.start(broadcast)
 	RoleService.onRolesChanged(function()
+		if
+			session.phase == "Lobby"
+			and RoleService.getStar() ~= nil
+			and RoleService.getDirector() ~= nil
+		then
+			local invitation = ShowSession.openInvitation(session, workspace:GetServerTimeNow())
+			if not invitation.error then
+				session = invitation.state
+				broadcast("PlayableInvitation", {
+					moods = { "Cozy", "Playful", "Dreamy" },
+				})
+			end
+		end
 		if state.phase == "Minigame" and not RoleService.getStar() then
 			abandonToken += 1
 			local pendingToken = abandonToken
@@ -717,6 +1080,71 @@ function ShowDirectorService.start()
 		lastInputSequence[player] = nil
 	end)
 
+	task.spawn(function()
+		while started do
+			task.wait(1)
+			local now = workspace:GetServerTimeNow()
+			strategy = DirectorStrategy.tick(strategy, now)
+			if
+				session.phase == "Minigame"
+				and RoleService.getDirector() == nil
+				and now - lastShowrunnerAt >= 5
+			then
+				local cue = DirectorStrategy.chooseShowrunnerCue(
+					strategy,
+					session.phase,
+					state.activeMinigame
+				)
+				if cue then
+					local play = DirectorStrategy.play(
+						strategy,
+						cue :: any,
+						session.phase,
+						state.activeMinigame,
+						now,
+						lastSignificantMomentAt
+					)
+					strategy = play.state
+					if play.accepted then
+						lastShowrunnerAt = now
+						broadcast("DirectorCardPlayed", {
+							cardId = cue,
+							effect = play.effect,
+							showrunner = true,
+						})
+						publishState("ShowrunnerCue")
+					end
+				end
+			end
+		end
+	end)
+
+	task.spawn(function()
+		local tickIndex = 0
+		while started do
+			task.wait(0.2)
+			if not RunService:IsStudio() or game:GetAttribute("BashFakeTelemetry") ~= true then
+				continue
+			end
+			local roundConfig = activeRoundConfig
+			local director = RoleService.getDirector()
+			if not roundConfig or not director then
+				continue
+			end
+			tickIndex += 1
+			for _, sample in
+				TelemetryMock.sampleAt(
+					roundConfig.roundId,
+					roundConfig.gameId,
+					roundConfig.seed,
+					tickIndex
+				)
+			do
+				sendEvent(director, "TelemetrySample", sample)
+			end
+		end
+	end)
+
 	-- Best-effort snapshots for the frozen M0 one-way role/event contract. The
 	-- next contract revision should replace this with an explicit client-ready handshake.
 	for _, delaySeconds in { 0.5, 1.5, 3 } do
@@ -724,6 +1152,41 @@ function ShowDirectorService.start()
 			publishState("StartupSnapshot")
 		end)
 	end
+end
+
+function ShowDirectorService.debugLaunch(gameId: string, seed: number?): (boolean, string?)
+	if not RunService:IsStudio() then
+		return false, "debug launch is Studio-only"
+	end
+	if not isKnownMinigameId(gameId) then
+		return false, "unknown minigame"
+	end
+	local owner = RoleService.getDirector() or RoleService.getStar()
+	if not owner or not RoleService.getStar() then
+		return false, "assign Bella before launching a debug round"
+	end
+	if session.phase == "Lobby" then
+		session = ShowSession.openInvitation(session, workspace:GetServerTimeNow()).state
+	end
+	if session.phase == "Invitation" then
+		session = ShowSession.chooseMood(session, "Cozy", workspace:GetServerTimeNow()).state
+		state = ShowState.transition(state, "StartHub", nil).state
+	end
+	if session.phase ~= "Lounge" and session.phase ~= "Interlude" then
+		return false, "finish or replay the active show first"
+	end
+	local transition = ShowSession.introduceAct(session, gameId, workspace:GetServerTimeNow())
+	if transition.error then
+		return false, transition.error
+	end
+	session = transition.state
+	debugSeedOverride = if type(seed) == "number"
+		then math.clamp(math.floor(seed), 1, 2_147_483_647)
+		else 1
+	task.defer(function()
+		launchMinigame(owner, gameId)
+	end)
+	return true, nil
 end
 
 return ShowDirectorService

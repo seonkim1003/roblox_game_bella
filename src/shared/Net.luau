@@ -1,4 +1,4 @@
--- Single source of truth for every RemoteEvent. FROZEN after Milestone 0.
+-- Single source of truth for every RemoteEvent.
 -- Server side creates the remotes; client side waits for them.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -7,11 +7,12 @@ local RunService = game:GetService("RunService")
 local FOLDER_NAME = "BashRemotes"
 
 local RoleAssigned = "Role_Assigned"
+local RoleSelection = "Role_Selection"
 local DirectorCommand = "Director_Command"
 local ShowEvent = "Show_Event"
 local MinigameScore = "Minigame_Score"
 
-local REMOTE_NAMES = { RoleAssigned, DirectorCommand, ShowEvent, MinigameScore }
+local REMOTE_NAMES = { RoleAssigned, RoleSelection, DirectorCommand, ShowEvent, MinigameScore }
 
 local function ensureServerFolder(): Folder
 	local existing = ReplicatedStorage:FindFirstChild(FOLDER_NAME)
@@ -42,6 +43,7 @@ end
 
 local Net = {
 	RoleAssigned = RoleAssigned,
+	RoleSelection = RoleSelection,
 	DirectorCommand = DirectorCommand,
 	ShowEvent = ShowEvent,
 	MinigameScore = MinigameScore,

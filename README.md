@@ -39,8 +39,9 @@ Then open Roblox Studio, use the Rojo plugin, and connect to the local server.
 
 1. Start Rojo with `rojo serve default.project.json` and connect the Studio plugin.
 2. In Studio's **Test** tab, choose **Local Server**, set **Players** to `2`, and start.
-3. The first player is the Director and the second is Bella unless user IDs are set
-   in `src/shared/Config.luau`.
+3. On each client, choose **Host** for the Director controls or **Bella** for the
+   player experience. Each role can be claimed once; configured user IDs reserve
+   their matching choices.
 4. On the Director client, select **Start Party Hub** and launch each game:
    **Ratthew's Cheese Tower**, **Gigi & Rambo Dash**, and **ASMR Satisfy Station**.
 5. On Bella's client, verify touch or keyboard/controller input, live score updates,
