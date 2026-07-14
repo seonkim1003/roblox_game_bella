@@ -16,6 +16,35 @@ local Config = require(Shared.Config)
 local Squish = require(script.Parent.Squish)
 
 local cameraKickToken = 0
+local accessibilityModule: any = nil
+local accessibilityResolved = false
+
+local function accessibility()
+	if accessibilityResolved then
+		return accessibilityModule
+	end
+	accessibilityResolved = true
+	local finale = script.Parent.Parent:FindFirstChild("finale")
+	local settings = finale and finale:FindFirstChild("AccessibilitySettings")
+	if settings and settings:IsA("ModuleScript") then
+		local ok, result = pcall(function()
+			return (require :: any)(settings)
+		end)
+		if ok then
+			accessibilityModule = result
+		end
+	end
+	return accessibilityModule
+end
+
+local function reducedMotion(): boolean
+	local settings = accessibility()
+	if settings and type(settings.get) == "function" then
+		local state = settings.get()
+		return type(state) == "table" and state.reducedMotion == true
+	end
+	return false
+end
 
 local function attachEmitter(part: BasePart, color: Color3, rate: number, lifetime: number)
 	local attachment = Instance.new("Attachment")
@@ -47,6 +76,9 @@ local Feedback: Types.FeedbackApi = {
 			color = options.color
 		end
 		local count = if options and type(options.count) == "number" then options.count else 14
+		if reducedMotion() then
+			count = math.min(count, 6)
+		end
 
 		local anchor = Instance.new("Part")
 		anchor.Name = "BashPop"
@@ -69,6 +101,9 @@ local Feedback: Types.FeedbackApi = {
 			origin = options.position
 		end
 		local amount = if options and type(options.amount) == "number" then options.amount else 40
+		if reducedMotion() then
+			amount = math.min(amount, 10)
+		end
 
 		local colors = {
 			Config.palette.primary,
@@ -95,7 +130,7 @@ local Feedback: Types.FeedbackApi = {
 			TweenService:Create(
 				flake,
 				TweenInfo.new(
-					1.6 + math.random() * 0.6,
+					if reducedMotion() then 0.7 else 1.6 + math.random() * 0.6,
 					Enum.EasingStyle.Quad,
 					Enum.EasingDirection.In
 				),
@@ -105,15 +140,21 @@ local Feedback: Types.FeedbackApi = {
 					Transparency = 1,
 				}
 			):Play()
-			Debris:AddItem(flake, 2.4)
+			Debris:AddItem(flake, if reducedMotion() then 1.1 else 2.4)
 		end
 	end,
 
 	squish = function(target: Instance, options: { [string]: any }?)
+		if reducedMotion() then
+			return
+		end
 		Squish.punch(target, options)
 	end,
 
 	cameraKick = function(strength: number)
+		if reducedMotion() then
+			return
+		end
 		local camera = Workspace.CurrentCamera
 		if not camera then
 			return

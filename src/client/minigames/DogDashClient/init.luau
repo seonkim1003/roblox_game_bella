@@ -25,6 +25,10 @@ local running = false
 local ctx: Types.ClientContext? = nil
 local disconnectLeft: (() -> ())? = nil
 local disconnectRight: (() -> ())? = nil
+local disconnectSecondary: (() -> ())? = nil
+local disconnectTertiary: (() -> ())? = nil
+local disconnectSwitch: (() -> ())? = nil
+local disconnectDrop: (() -> ())? = nil
 local heartbeat: RBXScriptConnection? = nil
 local stageFolder: Folder? = nil
 local dogModels: { Model } = {}
@@ -33,6 +37,68 @@ local state: Logic.State? = nil
 local config = Logic.configFor(0.5)
 local savedCameraType: Enum.CameraType? = nil
 local stretchToken = 0
+local lastTelemetryAt = 0
+local speedScale = 1
+local treatBoost = 0
+local activeDogName = "Gigi"
+local cardToken = 0
+
+local placeDogs: () -> ()
+local stretchDogs: () -> ()
+
+local function publishTelemetry()
+	if not ctx or not state then
+		return
+	end
+	local now = os.clock()
+	if now - lastTelemetryAt < 0.2 then
+		return
+	end
+	lastTelemetryAt = now
+	local progress = math.clamp(state.distance / Logic.RunDistance, 0, 1)
+	local accuracy = math.clamp(0.55 + state.combo * 0.05, 0, 1)
+	local dogTag = `dog:{activeDogName}`
+	StarController.publishRoundTelemetry("Score", state.score, dogTag)
+	StarController.publishRoundTelemetry("Progress", progress, dogTag)
+	StarController.publishRoundTelemetry("Combo", state.combo, dogTag)
+	StarController.publishRoundTelemetry(
+		"Friendship",
+		math.clamp(progress + state.combo * 0.02, 0, 1),
+		dogTag
+	)
+	StarController.publishRoundTelemetry("Accuracy", accuracy, dogTag)
+	StarController.publishRoundTelemetry("ProjectedGrade", accuracy * 100, dogTag)
+end
+
+local function activeDogIndexValue(): number
+	return if activeDogName == "Rambo" then 2 else 1
+end
+
+local function applyCard(cardId: string, duration: number, strength: number)
+	cardToken += 1
+	local token = cardToken
+	if cardId == "SlowMotion" then
+		speedScale = math.max(0.5, 1 - 0.3 * strength)
+	elseif cardId == "TreatRain" then
+		treatBoost = 0.35 * strength
+	elseif cardId == "DogAssist" then
+		if state then
+			Logic.shiftLane(state, if state.lane < Logic.DefaultLane then 1 else -1)
+			placeDogs()
+			stretchDogs()
+		end
+		StarController.sendRoundAction("SwitchDog", activeDogIndexValue())
+	elseif cardId == "ConfettiFinish" and ctx then
+		ctx.feedback.confetti({ amount = 28 })
+	end
+	task.delay(duration, function()
+		if token ~= cardToken then
+			return
+		end
+		speedScale = 1
+		treatBoost = 0
+	end)
+end
 
 local function laneX(lane: number): number
 	local mid = (Logic.LaneCount - 1) * 0.5
@@ -116,42 +182,60 @@ local function makeDog(name: string, color: Color3, offsetX: number): Model
 	return model
 end
 
-local function placeDogs()
+local function jumpHop(now: number): number
+	if not state or not Logic.isJumping(state, now) then
+		return 0
+	end
+	local remaining = math.max(0, state.jumpUntil - now)
+	local t = 1 - math.clamp(remaining / Logic.JumpDuration, 0, 1)
+	return math.sin(t * math.pi) * 1.45
+end
+
+local function placeDogsImpl()
 	if not state then
 		return
 	end
+	local now = os.clock()
+	local hop = jumpHop(now)
+	local hopping = hop > 0.04
 	local x = laneX(state.lane)
 	for index, dog in dogModels do
 		local body = dog:FindFirstChild("Body")
 		local head = dog:FindFirstChild("Head")
 		local side = if index == 1 then -0.7 else 0.7
-		local target = STAGE_ORIGIN + Vector3.new(x + side, 1.1, 0)
+		local target = STAGE_ORIGIN + Vector3.new(x + side, 1.1 + hop, 0)
+		local headTarget = target + Vector3.new(0, 0.25, -1.5)
 		if body and body:IsA("BasePart") then
-			TweenService
-				:Create(
+			if hopping then
+				body.CFrame = CFrame.new(target)
+			else
+				TweenService:Create(
 					body,
 					TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 					{
 						CFrame = CFrame.new(target),
 					}
-				)
-				:Play()
+				):Play()
+			end
 		end
 		if head and head:IsA("BasePart") then
-			TweenService
-				:Create(
+			if hopping then
+				head.CFrame = CFrame.new(headTarget)
+			else
+				TweenService:Create(
 					head,
 					TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 					{
-						CFrame = CFrame.new(target + Vector3.new(0, 0.25, -1.5)),
+						CFrame = CFrame.new(headTarget),
 					}
-				)
-				:Play()
+				):Play()
+			end
 		end
 	end
 end
+placeDogs = placeDogsImpl
 
-local function stretchDogs()
+local function stretchDogsImpl()
 	stretchToken += 1
 	local token = stretchToken
 	for _, dog in dogModels do
@@ -167,6 +251,7 @@ local function stretchDogs()
 		end
 	end
 end
+stretchDogs = stretchDogsImpl
 
 local function spawnVisual(entity: Logic.Entity)
 	local part = Instance.new("Part")
@@ -219,13 +304,15 @@ local function reportLive()
 		distance = state.distance,
 		progress = progress,
 		finished = state.finished,
+		activeDog = activeDogName,
 	})
+	publishTelemetry()
 end
 
-local function beginRound(difficulty: number)
+local function beginRound(difficulty: number, seed: number?)
 	destroyStage()
 	config = Logic.configFor(difficulty)
-	state = Logic.newState(difficulty)
+	state = Logic.newState(difficulty, seed)
 
 	local folder = Instance.new("Folder")
 	folder.Name = "DogDashStage"
@@ -256,6 +343,7 @@ local function beginRound(difficulty: number)
 
 	local gigi = Config.dogs[1]
 	local rambo = Config.dogs[2]
+	activeDogName = gigi.name
 	table.insert(dogModels, makeDog(gigi.name, gigi.color, -0.7))
 	table.insert(dogModels, makeDog(rambo.name, rambo.color, 0.7))
 	placeDogs()
@@ -271,12 +359,19 @@ local function beginRound(difficulty: number)
 		if not running or not state or not ctx then
 			return
 		end
-		local events = Logic.tick(state, dt, config)
+		local scaledDt = dt * speedScale
+		-- TreatRain gently biases spawn luck by advancing the spawn clock.
+		if treatBoost > 0 then
+			state.spawnTimer -= scaledDt * treatBoost
+		end
+		local now = os.clock()
+		local events = Logic.tick(state, scaledDt, config, now)
 		for _, event in events do
 			if event.kind == "Spawn" then
 				spawnVisual(event.entity)
 			elseif event.kind == "Catch" then
 				stretchDogs()
+				StarController.sendRoundAction("Lunge", 0.9)
 				local part = entityParts[event.entityId]
 				local pos = if part
 					then part.Position
@@ -289,6 +384,7 @@ local function beginRound(difficulty: number)
 					entityParts[event.entityId] = nil
 				end
 			elseif event.kind == "Hit" then
+				StarController.sendRoundAction("Jump", 0.15)
 				ctx.feedback.cameraKick(0.85)
 				ctx.sound.play("wobble")
 				local part = entityParts[event.entityId]
@@ -296,16 +392,35 @@ local function beginRound(difficulty: number)
 					part:Destroy()
 					entityParts[event.entityId] = nil
 				end
+				ctx.reportScore(state.score, {
+					detail = "combo broken",
+					combo = 0,
+					comboBroken = true,
+					distance = state.distance,
+					progress = math.clamp(state.distance / Logic.RunDistance, 0, 1),
+					finished = state.finished,
+					activeDog = activeDogName,
+				})
 			elseif event.kind == "Finish" then
 				local hud = StarController.getHud()
 				hud:setHint("Dash complete — waiting for Director")
 				ctx.sound.play("cheer")
+				StarController.sendRoundAction("Complete", state.score)
 				reportLive()
 			end
 		end
 		syncEntityParts()
-		if #events > 0 or (state.distance // 4) ~= ((state.distance - state.speed * dt) // 4) then
+		if Logic.isJumping(state, now) then
+			placeDogs()
+		end
+		local progress = math.clamp(state.distance / Logic.RunDistance, 0, 1)
+		if
+			#events > 0
+			or (state.distance // 4) ~= ((state.distance - state.speed * scaledDt) // 4)
+		then
 			reportLive()
+		elseif (state.distance // 20) ~= ((state.distance - state.speed * scaledDt) // 20) then
+			StarController.sendRoundAction("Route", progress)
 		end
 	end)
 end
@@ -327,9 +442,28 @@ local function stopDash()
 		disconnectRight()
 		disconnectRight = nil
 	end
+	if disconnectSecondary then
+		disconnectSecondary()
+		disconnectSecondary = nil
+	end
+	if disconnectTertiary then
+		disconnectTertiary()
+		disconnectTertiary = nil
+	end
+	if disconnectSwitch then
+		disconnectSwitch()
+		disconnectSwitch = nil
+	end
+	if disconnectDrop then
+		disconnectDrop()
+		disconnectDrop = nil
+	end
 	destroyStage()
 	restoreCamera()
 	ctx = nil
+	speedScale = 1
+	treatBoost = 0
+	StarController.clearSoftActions()
 	local hud = StarController.getHud()
 	hud:setHint("")
 end
@@ -340,6 +474,10 @@ local DogDashClient: Types.MinigameClient = {
 	start = function(_self, clientCtx)
 		ctx = clientCtx
 		running = true
+		speedScale = 1
+		treatBoost = 0
+		lastTelemetryAt = 0
+		activeDogName = Config.dogs[1].name
 
 		clientCtx.onEvent(function(event: string, payload: { [string]: any }?)
 			if not running then
@@ -349,13 +487,27 @@ local DogDashClient: Types.MinigameClient = {
 				local difficulty = if payload and type(payload.difficulty) == "number"
 					then payload.difficulty
 					else 0.5
-				beginRound(difficulty)
+				local seed = if payload and type(payload.seed) == "number"
+					then payload.seed
+					else nil
+				beginRound(difficulty, seed)
 			elseif event == "DogDashDifficulty" then
 				if payload and type(payload.difficulty) == "number" then
 					applyDifficulty(payload.difficulty)
 				end
 			elseif event == "DogDashEnd" then
 				stopDash()
+			elseif event == "DogDashCard" or event == "DirectorCardPlayed" then
+				local cardId = payload and payload.cardId
+				if type(cardId) == "string" then
+					local duration = if payload and type(payload.duration) == "number"
+						then payload.duration
+						else 4
+					local strength = if payload and type(payload.strength) == "number"
+						then payload.strength
+						else 1
+					applyCard(cardId, duration, strength)
+				end
 			end
 		end)
 
@@ -367,11 +519,27 @@ local DogDashClient: Types.MinigameClient = {
 		if disconnectRight then
 			disconnectRight()
 		end
+		if disconnectSecondary then
+			disconnectSecondary()
+		end
+		if disconnectTertiary then
+			disconnectTertiary()
+		end
+		if disconnectSwitch then
+			disconnectSwitch()
+		end
+		if disconnectDrop then
+			disconnectDrop()
+		end
 		disconnectLeft = input:on("Left", function()
 			if running and state and not state.finished then
 				Logic.shiftLane(state, -1)
 				placeDogs()
 				stretchDogs()
+				StarController.sendRoundAction(
+					"Route",
+					math.clamp(state.distance / Logic.RunDistance, 0, 1)
+				)
 			end
 		end)
 		disconnectRight = input:on("Right", function()
@@ -379,14 +547,79 @@ local DogDashClient: Types.MinigameClient = {
 				Logic.shiftLane(state, 1)
 				placeDogs()
 				stretchDogs()
+				StarController.sendRoundAction(
+					"Route",
+					math.clamp(state.distance / Logic.RunDistance, 0, 1)
+				)
+			end
+		end)
+		disconnectDrop = input:on("Drop", function()
+			-- Space / tap also jumps to clear puddles.
+			if running and state and not state.finished then
+				local now = os.clock()
+				if Logic.jump(state, now) then
+					StarController.sendRoundAction("Jump", 1)
+					placeDogs()
+					if ctx then
+						ctx.sound.play("jump")
+						local paws = STAGE_ORIGIN + Vector3.new(laneX(state.lane), 1.1, 0)
+						ctx.feedback.pop(paws, { color = Color3.fromRGB(210, 240, 255), count = 8 })
+					end
+				end
+			end
+		end)
+		disconnectSecondary = input:on("Secondary", function()
+			if running and state and not state.finished then
+				local now = os.clock()
+				if Logic.jump(state, now) then
+					StarController.sendRoundAction("Jump", 1)
+					placeDogs()
+					if ctx then
+						ctx.sound.play("jump")
+						local paws = STAGE_ORIGIN + Vector3.new(laneX(state.lane), 1.1, 0)
+						ctx.feedback.pop(paws, { color = Color3.fromRGB(210, 240, 255), count = 8 })
+					end
+				end
+			end
+		end)
+		disconnectTertiary = input:on("Tertiary", function()
+			if running and state and not state.finished then
+				local now = os.clock()
+				if Logic.charge(state, now) then
+					StarController.sendRoundAction("Charge", 1)
+					if ctx then
+						ctx.sound.play("charge")
+						ctx.feedback.cameraKick(0.2)
+					end
+				end
+			end
+		end)
+		disconnectSwitch = input:on("Switch", function()
+			if running and state and not state.finished then
+				local lead = Logic.switchDog(state)
+				activeDogName = if lead == 1 then Config.dogs[1].name else Config.dogs[2].name
+				StarController.sendRoundAction("SwitchDog", lead)
+				placeDogs()
+				stretchDogs()
+				publishTelemetry()
+				if ctx then
+					ctx.sound.play("switchDog")
+					StarController.getHud():setHint(`Lead: {activeDogName}`)
+				end
 			end
 		end)
 
 		local hud = StarController.getHud()
-		hud:setHint("Swipe / ← → / A D — catch treats, dodge puddles")
+		hud:setHint("←→ route · jump on tap · soft buttons for charge / switch")
+		StarController.setSoftActions({
+			{ id = "Drop", label = "Jump" },
+			{ id = "Tertiary", label = "Charge" },
+			{ id = "Switch", label = "Switch" },
+		})
 	end,
 
 	stop = function(_self)
+		StarController.clearSoftActions()
 		stopDash()
 	end,
 }

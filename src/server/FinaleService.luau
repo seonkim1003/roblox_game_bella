@@ -16,6 +16,7 @@ local VisualKit = require(script.Parent.world.VisualKit)
 
 type Payload = { [string]: any }
 type Broadcast = (event: string, payload: Payload?) -> ()
+type Complete = () -> ()
 type LightingSnapshot = {
 	ambient: Color3,
 	brightness: number,
@@ -405,12 +406,28 @@ local function addSetDressing(parent: Instance, center: CFrame)
 	end
 end
 
+local function summaryAccent(summary: Payload?): Color3
+	local accent = if summary then summary.lightingAccent else nil
+	if accent == "Sky" then
+		return P.sky
+	elseif accent == "Blush" then
+		return P.blush
+	elseif accent == "Mint" then
+		return P.mint
+	end
+	return P.butter
+end
+
 function FinaleService.start(broadcastEvent: Broadcast)
 	broadcast = broadcastEvent
 	clearFinale()
 end
 
-function FinaleService.begin(star: Player?): (boolean, string?)
+function FinaleService.begin(
+	star: Player?,
+	summary: Payload?,
+	onComplete: Complete?
+): (boolean, string?)
 	if not star or star.Parent ~= Players then
 		return false, "Bella is not connected"
 	end
@@ -429,19 +446,30 @@ function FinaleService.begin(star: Player?): (boolean, string?)
 	finaleWorld = folder
 	local center = humanoidRoot.CFrame * CFrame.new(0, -2.5, -10)
 	addSetDressing(folder, center)
+	local accent = summaryAccent(summary)
+	local accentOrb = VisualKit.ball(
+		folder,
+		"PerformanceAccent",
+		Vector3.new(0.5, 0.5, 0.5),
+		center * CFrame.new(0, 5.8, -4.8),
+		accent,
+		Enum.Material.Neon
+	)
+	VisualKit.pointLight(accentOrb, accent, 0.8, 10)
+	local dogPose = if summary and summary.dogPose == "VictoryTandem" then "Standing" else "Curled"
 	DogBuilder.create(
 		folder,
 		Config.dogs[1].name,
 		Config.dogs[1].color,
 		center * CFrame.new(-1.2, 0.75, 0.3),
-		{ pose = "Curled", accessoryColor = P.blush, showName = false }
+		{ pose = dogPose :: any, accessoryColor = P.blush, showName = false }
 	)
 	DogBuilder.create(
 		folder,
 		Config.dogs[2].name,
 		Config.dogs[2].color,
 		center * CFrame.new(1.4, 0.75, 0.4) * CFrame.Angles(0, math.rad(20), 0),
-		{ pose = "Curled", accessoryColor = P.sky, showName = false }
+		{ pose = dogPose :: any, accessoryColor = P.sky, showName = false }
 	)
 
 	local guestRoot = createMaskedGuest(folder, center)
@@ -464,13 +492,24 @@ function FinaleService.begin(star: Player?): (boolean, string?)
 	if broadcast then
 		broadcast(
 			"FinaleStarted",
-			{ messageLines = Config.finaleMessage, starName = Config.starName }
+			{ messageLines = Config.finaleMessage, starName = Config.starName, summary = summary }
 		)
 	end
 	broadcastBeat(token, 0.8, "LightsDimmed")
 	broadcastBeat(token, 3.5, "Message")
 	broadcastBeat(token, 8.5, "BroodingGuest")
 	broadcastBeat(token, 14, "HappyBirthday")
+	task.delay(17.5, function()
+		if token ~= runToken or not finaleWorld or not finaleWorld.Parent then
+			return
+		end
+		if broadcast then
+			broadcast("FinaleBeat", { beat = "KeepsakeReady", summary = summary })
+		end
+		if onComplete then
+			onComplete()
+		end
+	end)
 	return true, nil
 end
 

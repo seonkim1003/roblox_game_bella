@@ -118,4 +118,19 @@ function VisualKit.pointLight(
 	return light
 end
 
+function VisualKit.cameraMarker(parent: Instance, name: string, cf: CFrame): Part
+	local marker = VisualKit.part(
+		parent,
+		name,
+		Vector3.new(0.5, 0.5, 0.5),
+		cf,
+		Color3.fromRGB(255, 244, 225),
+		Enum.Material.SmoothPlastic,
+		{ transparency = 1, castShadow = false }
+	)
+	marker.CanQuery = false
+	marker:SetAttribute("CameraMarker", true)
+	return marker
+end
+
 return VisualKit

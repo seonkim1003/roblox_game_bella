@@ -7,12 +7,16 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local VisualConfig = require(Shared.VisualConfig)
 
 local CueCardHand = require(script.Parent.CueCardHand)
+local DirectorDashboardModel = require(script.Parent.DirectorDashboardModel)
 local DirectorNotice = require(script.Parent.DirectorNotice)
 local LiveTrendGraph = require(script.Parent.LiveTrendGraph)
+local PredictionControls = require(script.Parent.PredictionControls)
 local ProgressWidget = require(script.Parent.ProgressWidget)
 local ProjectedGrade = require(script.Parent.ProjectedGrade)
 local RecentMoments = require(script.Parent.RecentMoments)
+local ResponsiveTokens = require(script.Parent.ResponsiveTokens)
 local ShowTimeline = require(script.Parent.ShowTimeline)
+local StudioDashboard = require(script.Parent.StudioDashboard)
 
 type Payload = { [string]: any }
 type Send = (string, Payload?) -> ()
@@ -22,6 +26,8 @@ export type Shell = {
 	pushTelemetry: (self: Shell, Payload) -> (),
 	pushMoment: (self: Shell, Payload) -> (),
 	cardPlayed: (self: Shell, Payload) -> (),
+	setConnectionHealth: (self: Shell, Payload) -> (),
+	setDebugTelemetry: (self: Shell, boolean) -> (),
 	setNotice: (self: Shell, string, boolean?) -> (),
 	destroy: (self: Shell) -> (),
 }
@@ -67,18 +73,16 @@ function DirectorShell.new(send: Send): Shell
 	content.BackgroundTransparency = 1
 	content.BorderSizePixel = 0
 	content.CanvasSize = UDim2.new()
-	content.Position = UDim2.fromOffset(20, 18)
 	content.ScrollBarThickness = 5
-	content.Size = UDim2.new(1, -40, 1, -36)
 	content.Parent = backdrop
 	local layout = Instance.new("UIListLayout")
-	layout.Padding = UDim.new(0, 10)
 	layout.Parent = content
 
 	local heading = label(content, "PREMIERE SHOWRUNNER", 34, 22)
 	heading.Font = Enum.Font.GothamBlack
 	local connection = label(content, "● Connecting to authoritative show state", 26, 12)
 	connection.TextColor3 = P.butter
+	local studio = StudioDashboard.new(content, send)
 	local timeline = ShowTimeline.new(content)
 	local graph = LiveTrendGraph.new(content)
 	local progress = ProgressWidget.new(content)
@@ -87,14 +91,39 @@ function DirectorShell.new(send: Send): Shell
 	local nextCue = label(content, "NEXT BEST CUE  ·  Waiting for context", 34, 13)
 	nextCue.Font = Enum.Font.GothamBold
 	nextCue.TextColor3 = P.mint
+	local predictions = PredictionControls.new(content, send)
 	local cards = CueCardHand.new(content, send)
 	local moments = RecentMoments.new(content)
 	local notice = DirectorNotice.new(content)
+	local viewportConnection: RBXScriptConnection? = nil
+	local function applyResponsiveLayout()
+		local size = backdrop.AbsoluteSize
+		local x, y, width, height = ResponsiveTokens.contentBounds(size.X, size.Y)
+		local tokens = ResponsiveTokens.forWidth(size.X)
+		content.Position = UDim2.fromOffset(x, y)
+		content.Size = UDim2.fromOffset(width, height)
+		layout.Padding = UDim.new(0, tokens.sectionGap)
+		heading.TextSize = tokens.headingSize
+	end
+	applyResponsiveLayout()
+	viewportConnection =
+		backdrop:GetPropertyChangedSignal("AbsoluteSize"):Connect(applyResponsiveLayout)
 
 	local currentGame: string? = nil
 	local metrics: { [string]: number } = {}
+	local activeDog: string? = nil
+	local remainingObjects: number? = nil
 	local marker: string? = nil
 	local shell = {} :: any
+
+	local function renderConnectionHealth(payload: Payload)
+		local health = DirectorDashboardModel.connectionHealth(payload)
+		connection.Text = health.text
+		connection.TextColor3 = if health.severity == "Healthy"
+			then P.mint
+			elseif health.severity == "Error" then P.blush
+			else P.butter
+	end
 
 	local function refreshGameDetail()
 		if currentGame == "CheeseTower" then
@@ -106,12 +135,17 @@ function DirectorShell.new(send: Send): Shell
 			gameDetail.Text =
 				`ROUTE {math.round((metrics.Progress or 0) * 100)}%  ·  TREATS {math.round(
 					(metrics.Accuracy or 0) * 100
-				)}%  ·  FRIENDSHIP {math.round((metrics.Friendship or 0) * 100)}%`
+				)}%  ·  FRIENDSHIP {math.round((metrics.Friendship or 0) * 100)}%  ·  ACTIVE DOG {string.upper(
+					activeDog or "WAITING"
+				)}`
 		elseif currentGame == "SatisfyStation" then
 			gameDetail.Text =
 				`ORDER {math.round((metrics.Progress or 0) * 100)}%  ·  GESTURES {math.round(
 					(metrics.Accuracy or 0) * 100
-				)}%  ·  FLOW {math.round((metrics.Flow or 0) * 100)}%`
+				)}%  ·  FLOW {math.round((metrics.Flow or 0) * 100)}%  ·  {if remainingObjects
+						~= nil
+					then remainingObjects
+					else "--"} OBJECTS LEFT`
 		else
 			gameDetail.Text = "Waiting for act telemetry"
 		end
@@ -122,15 +156,35 @@ function DirectorShell.new(send: Send): Shell
 		local session = if type(payload.session) == "table" then payload.session else {}
 		local actIndex = if type(session.actIndex) == "number" then session.actIndex else 0
 		timeline.set(phase, actIndex)
-		currentGame = if type(payload.activeMinigame) == "string"
+		local nextGame = if type(payload.activeMinigame) == "string"
 			then payload.activeMinigame
 			else nil
+		if nextGame ~= currentGame then
+			table.clear(metrics)
+			activeDog = nil
+			remainingObjects = nil
+		end
+		currentGame = nextGame
 		local connected = payload.starConnected == true
 		connection.Text = if connected
 			then "● Bella connected · round validation healthy"
 			else "● Bella reconnecting · authoritative round paused"
 		connection.TextColor3 = if connected then P.mint else P.butter
 		local director = if type(payload.director) == "table" then payload.director else {}
+		local ingressHealth = if type(director.ingressHealth) == "table"
+			then director.ingressHealth
+			else nil
+		if ingressHealth and ingressHealth.recoveryPending == true then
+			renderConnectionHealth(ingressHealth)
+		end
+		local prediction = if type(director.prediction) == "string"
+			then director.prediction
+			else nil
+		local predictionResolved = director.predictionResolved == true
+		local predictionMatched = if type(director.predictionMatched) == "boolean"
+			then director.predictionMatched
+			else nil
+		predictions.set(phase, prediction, predictionResolved, predictionMatched)
 		local hand = if type(director.hand) == "table" then director.hand else {}
 		cards.set(hand)
 		local energy = if type(director.energy) == "number" then director.energy else 0
@@ -158,6 +212,13 @@ function DirectorShell.new(send: Send): Shell
 			return
 		end
 		metrics[metric] = value
+		local context = DirectorDashboardModel.telemetryContext(sample.tag)
+		if context.activeDog then
+			activeDog = context.activeDog
+		end
+		if context.remainingObjects ~= nil then
+			remainingObjects = context.remainingObjects
+		end
 		if metric == "Progress" then
 			progress.set(value)
 		end
@@ -186,10 +247,24 @@ function DirectorShell.new(send: Send): Shell
 		moments.push("Director cue", cardId)
 	end
 
+	function shell:setConnectionHealth(payload: Payload)
+		renderConnectionHealth(payload)
+	end
+
+	function shell:setDebugTelemetry(enabled: boolean)
+		if studio then
+			studio.setTelemetry(enabled)
+		end
+	end
+
 	function shell:setNotice(text: string, isError: boolean?)
 		notice.set(text, isError)
 	end
 	function shell:destroy()
+		if viewportConnection then
+			viewportConnection:Disconnect()
+			viewportConnection = nil
+		end
 		gui:Destroy()
 	end
 	return shell :: Shell

@@ -65,6 +65,7 @@ local bothSkip = ShowSession.confirmFinaleSkip(oneSkip.state, "Star", 16)
 expect(bothSkip.state.phase == "KeepsakeResult", "both confirmations skip finale")
 local encore = ShowSession.requestEncore(bothSkip.state)
 expect(encore.state.encoreRequested, "Bella can request encore")
+expect(ShowSession.requestEncore(encore.state).error ~= nil, "encore is deterministic and one-shot")
 local replay = ShowSession.replay(encore.state, 17)
 expect(replay.state.phase == "Lounge" and #replay.state.results == 0, "replay resets acts")
 

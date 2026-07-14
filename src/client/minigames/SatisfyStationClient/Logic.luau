@@ -1,6 +1,7 @@
 --!strict
--- Pure ASMR Satisfy Station logic: slice/squish/pop, gentle combos, difficulty.
+-- Pure ASMR Satisfy Station logic: Trace/Squish/Pop/Peel/Pipe, gentle combos.
 -- No Roblox APIs — safe for Lune unit tests.
+-- Local "Slice" stays as an alias for Trace so existing juice/input naming works.
 
 local Logic = {}
 
@@ -11,7 +12,7 @@ Logic.WrongPenalty = 0 -- playful: wrong action just breaks combo
 Logic.TraySizeEasy = 6
 Logic.TraySizeHard = 10
 
-export type ActionKind = "Slice" | "Squish" | "Pop"
+export type ActionKind = "Slice" | "Trace" | "Squish" | "Pop" | "Peel" | "Pipe"
 
 export type Item = {
 	id: number,
@@ -20,8 +21,8 @@ export type Item = {
 }
 
 export type Config = {
-	comboWindow: number, -- seconds between actions to keep the combo
-	perfectWindow: number, -- tighter window inside comboWindow for a perfect
+	comboWindow: number,
+	perfectWindow: number,
 	traySize: number,
 }
 
@@ -33,6 +34,7 @@ export type State = {
 	lastActionAt: number?,
 	finished: boolean,
 	resolvedCount: number,
+	seed: number,
 }
 
 export type ActionResult = {
@@ -46,27 +48,29 @@ export type ActionResult = {
 	itemId: number?,
 }
 
+local KINDS: { ActionKind } = { "Slice", "Squish", "Pop", "Peel", "Pipe" }
+
 function Logic.configFor(difficulty: number): Config
 	local d = math.clamp(difficulty, 0, 1)
-	-- Higher difficulty = tighter (but still gentle) timing windows.
 	local comboWindow = 1.35 - d * 0.55 -- 1.35 .. 0.8
 	return {
 		comboWindow = comboWindow,
-		perfectWindow = comboWindow * (0.55 - d * 0.15), -- ~0.55x .. ~0.4x of window
+		perfectWindow = comboWindow * (0.55 - d * 0.15),
 		traySize = math.floor(
 			Logic.TraySizeEasy + d * (Logic.TraySizeHard - Logic.TraySizeEasy) + 0.5
 		),
 	}
 end
 
-local function kindAt(index: number): ActionKind
-	local slot = ((index - 1) % 3) + 1
-	if slot == 1 then
-		return "Slice" :: ActionKind
-	elseif slot == 2 then
-		return "Squish" :: ActionKind
+local function normalizeKind(kind: ActionKind): ActionKind
+	if kind == "Trace" then
+		return "Slice"
 	end
-	return "Pop" :: ActionKind
+	return kind
+end
+
+local function kindAt(index: number): ActionKind
+	return KINDS[((index - 1) % #KINDS) + 1]
 end
 
 local function makeItem(state: State, kind: ActionKind): Item
@@ -79,8 +83,9 @@ local function makeItem(state: State, kind: ActionKind): Item
 	return item
 end
 
-function Logic.newState(difficulty: number, now: number?): State
+function Logic.newState(difficulty: number, now: number?, seed: number?, traySize: number?): State
 	local config = Logic.configFor(difficulty)
+	local size = if traySize ~= nil then math.max(1, math.floor(traySize)) else config.traySize
 	local state: State = {
 		score = 0,
 		combo = 0,
@@ -89,11 +94,12 @@ function Logic.newState(difficulty: number, now: number?): State
 		lastActionAt = nil,
 		finished = false,
 		resolvedCount = 0,
+		seed = if seed ~= nil then math.floor(seed) else math.floor(difficulty * 10_000 + size),
 	}
-	for i = 1, config.traySize do
-		-- Cycle kinds, then sprinkle a little determinism without Roblox Random.
+	for i = 1, size do
 		local kind: ActionKind = kindAt(i)
-		if (i * 17 + config.traySize) % 5 == 0 then
+		local sprinkle = (state.seed * 17 + i * 31) % 5
+		if sprinkle == 0 then
 			kind = kindAt(i + 1)
 		end
 		table.insert(state.items, makeItem(state, kind))
@@ -105,7 +111,7 @@ function Logic.newState(difficulty: number, now: number?): State
 end
 
 function Logic.reset(state: State, difficulty: number)
-	local fresh = Logic.newState(difficulty)
+	local fresh = Logic.newState(difficulty, nil, state.seed, #state.items)
 	state.score = fresh.score
 	state.combo = fresh.combo
 	state.items = fresh.items
@@ -113,6 +119,7 @@ function Logic.reset(state: State, difficulty: number)
 	state.lastActionAt = nil
 	state.finished = false
 	state.resolvedCount = 0
+	state.seed = fresh.seed
 end
 
 function Logic.remaining(state: State): number
@@ -134,7 +141,14 @@ function Logic.findItem(state: State, itemId: number): Item?
 	return nil
 end
 
--- Apply an action to a specific tray item at time `now` (seconds, monotonic).
+function Logic.roundActionFor(kind: ActionKind): string
+	local normalized = normalizeKind(kind)
+	if normalized == "Slice" then
+		return "Trace"
+	end
+	return normalized
+end
+
 function Logic.applyAction(
 	state: State,
 	itemId: number,
@@ -169,7 +183,9 @@ function Logic.applyAction(
 		}
 	end
 
-	if item.kind ~= action then
+	local wanted = normalizeKind(item.kind)
+	local performed = normalizeKind(action)
+	if wanted ~= performed then
 		state.combo = 0
 		state.lastActionAt = now
 		return {
@@ -194,7 +210,6 @@ function Logic.applyAction(
 		withinCombo = gap <= config.comboWindow
 		perfect = gap <= config.perfectWindow
 	else
-		-- First successful action starts the chain and never counts as "perfect timing".
 		withinCombo = true
 		perfect = false
 	end

@@ -145,6 +145,42 @@ do
 	check("resolved: second apply rejected", not again.accepted)
 end
 
+-- 9. Peel / Pipe / Trace aliases round-trip and clear correctly.
+do
+	local state = Logic.newState(0)
+	local config = Logic.configFor(0)
+	state.items = {
+		{ id = 1, kind = "Peel", resolved = false },
+		{ id = 2, kind = "Pipe", resolved = false },
+		{ id = 3, kind = "Slice", resolved = false },
+	}
+	state.nextId = 4
+	local peel = Logic.applyAction(state, 1, "Peel", 1, config)
+	local pipe = Logic.applyAction(state, 2, "Pipe", 1.2, config)
+	local trace = Logic.applyAction(state, 3, "Trace", 1.4, config)
+	check("peel: accepted", peel.accepted)
+	check("pipe: accepted", pipe.accepted)
+	check("trace: alias accepted for Slice", trace.accepted)
+	check("roundAction: Peel", Logic.roundActionFor("Peel") == "Peel")
+	check("roundAction: Slice maps to Trace", Logic.roundActionFor("Slice") == "Trace")
+	check("tray finished", state.finished)
+end
+
+-- 9. Seeded trays are deterministic for the same seed + tray size.
+do
+	local a = Logic.newState(0.4, nil, 42, 8)
+	local b = Logic.newState(0.4, nil, 42, 8)
+	check("seed: same length", #a.items == #b.items)
+	local same = true
+	for i = 1, #a.items do
+		if a.items[i].kind ~= b.items[i].kind then
+			same = false
+			break
+		end
+	end
+	check("seed: identical kinds", same)
+end
+
 if failed > 0 then
 	error(`SatisfyStation.spec: {failed} check(s) failed ({passed} passed)`)
 end

@@ -1,11 +1,10 @@
--- Personalization. Placeholders now; fill in before the real show.
--- See docs/BIRTHDAY_BASH_PLAN.md section 2 for the full checklist.
+-- Personalization used by the authoritative Premiere flow.
 
 local Config = {
 	starName = "Bella",
 	directorUserId = 0, -- your Roblox userId (assigns you the Director role)
 	starUserId = 0, -- Bella's Roblox userId (assigns her the Star role)
-	birthday = "TODO",
+	birthday = "Bella's Birthday Premiere",
 
 	palette = {
 		primary = Color3.fromRGB(255, 143, 196),
@@ -14,13 +13,21 @@ local Config = {
 	},
 
 	dogs = {
-		{ name = "Gigi", color = Color3.fromRGB(196, 130, 74), personality = "TODO" },
-		{ name = "Rambo", color = Color3.fromRGB(54, 40, 32), personality = "TODO" },
+		{
+			name = "Gigi",
+			color = Color3.fromRGB(196, 130, 74),
+			personality = "bright, curious, and always ready for the spotlight",
+		},
+		{
+			name = "Rambo",
+			color = Color3.fromRGB(54, 40, 32),
+			personality = "steady, sweet, and happiest right beside Bella",
+		},
 	},
 
 	finaleMessage = {
 		"Happy Birthday, Bella.",
-		"(placeholder -- your real message goes here)",
+		"Tonight's little world was made to celebrate the joy you bring to ours.",
 	},
 
 	-- false = keep it out of the show (default: all guardrails on).

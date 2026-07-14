@@ -32,10 +32,17 @@ end
 local predicted = DirectorStrategy.predict(state, "Perfect")
 local resolved = DirectorStrategy.resolvePrediction(predicted, "Perfect")
 expect(resolved.finaleEnergy == 15, "correct prediction builds finale energy")
+expect(resolved.predictionMatched == true, "correct prediction records a match")
 expect(
 	DirectorStrategy.resolvePrediction(resolved, "Perfect").finaleEnergy == 15,
 	"prediction resolves once"
 )
 expect(DirectorStrategy.cueGrade(state) == "B", "unused fallback receives neutral grade")
+local missed = DirectorStrategy.resolvePrediction(predicted, "Rescue")
+expect(missed.predictionMatched == false, "incorrect prediction records a miss")
+local reset = DirectorStrategy.resetPrediction(resolved)
+expect(reset.prediction == nil and reset.predictionMatched == nil, "new round resets prediction")
+expect(DirectorStrategy.isPrediction("Finish"), "known prediction is accepted")
+expect(not DirectorStrategy.isPrediction("Combo"), "unknown prediction is rejected")
 
 print(`PASS DirectorStrategy.spec ({assertions} assertions)`)

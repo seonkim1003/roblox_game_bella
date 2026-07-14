@@ -9,6 +9,8 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local VisualConfig = require(Shared.VisualConfig)
 local VisualKit = require(script.Parent.VisualKit)
+local PremiereSets = require(script.Parent.PremiereSets)
+local WorldBudget = require(script.Parent.WorldBudget)
 
 local P = VisualConfig.palette
 local WORLD_NAME = "BirthdayBashWorld"
@@ -457,6 +459,17 @@ function HubBuilder.start()
 		end
 	end
 	addAnchors(folder)
+	PremiereSets.build(folder)
+	local report = WorldBudget.audit(folder, VisualConfig.budget)
+	folder:SetAttribute("BudgetLights", report.lights)
+	folder:SetAttribute("BudgetTransparentDecorations", report.transparentDecorations)
+	folder:SetAttribute("BudgetParticleEmitters", report.particleEmitters)
+	folder:SetAttribute("WithinVisualBudget", report.withinBudget)
+	if not report.withinBudget then
+		warn(
+			`[Bash] Authored world exceeds visual budget: {report.lights} lights, {report.transparentDecorations} transparent decorations`
+		)
+	end
 end
 
 function HubBuilder.getWorld(): Folder?

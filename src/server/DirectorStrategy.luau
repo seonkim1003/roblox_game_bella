@@ -26,6 +26,7 @@ export type State = {
 	updatedAt: number,
 	prediction: string?,
 	predictionResolved: boolean,
+	predictionMatched: boolean?,
 	encoreRequested: boolean,
 	lastCueAt: number?,
 	cueScore: number,
@@ -114,6 +115,7 @@ local function clone(state: State): State
 		updatedAt = state.updatedAt,
 		prediction = state.prediction,
 		predictionResolved = state.predictionResolved,
+		predictionMatched = state.predictionMatched,
 		encoreRequested = state.encoreRequested,
 		lastCueAt = state.lastCueAt,
 		cueScore = state.cueScore,
@@ -152,6 +154,7 @@ function DirectorStrategy.new(seed: number, now: number): State
 		updatedAt = now,
 		prediction = nil,
 		predictionResolved = false,
+		predictionMatched = nil,
 		encoreRequested = false,
 		lastCueAt = nil,
 		cueScore = 0,
@@ -259,6 +262,19 @@ function DirectorStrategy.predict(state: State, prediction: string): State
 	end
 	nextState.prediction = prediction
 	nextState.predictionResolved = false
+	nextState.predictionMatched = nil
+	return nextState
+end
+
+function DirectorStrategy.isPrediction(prediction: string): boolean
+	return prediction == "Perfect" or prediction == "Rescue" or prediction == "Finish"
+end
+
+function DirectorStrategy.resetPrediction(state: State): State
+	local nextState = clone(state)
+	nextState.prediction = nil
+	nextState.predictionResolved = false
+	nextState.predictionMatched = nil
 	return nextState
 end
 
@@ -268,7 +284,8 @@ function DirectorStrategy.resolvePrediction(state: State, momentKind: string): S
 		return nextState
 	end
 	nextState.predictionResolved = true
-	if nextState.prediction == momentKind then
+	nextState.predictionMatched = nextState.prediction == momentKind
+	if nextState.predictionMatched then
 		nextState.energy = math.min(MAX_ENERGY, nextState.energy + 2)
 		nextState.finaleEnergy = math.min(MAX_FINALE_ENERGY, nextState.finaleEnergy + 15)
 	end

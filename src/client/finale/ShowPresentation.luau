@@ -10,6 +10,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Net = require(Shared.Net)
 local VisualConfig = require(Shared.VisualConfig)
+local AccessibilityControls = require(script.Parent.AccessibilityControls)
 
 type Payload = { [string]: any }
 
@@ -21,6 +22,7 @@ local gui: ScreenGui? = nil
 local panel: Frame? = nil
 local titleLabel: TextLabel? = nil
 local bodyLabel: TextLabel? = nil
+local summaryLabel: TextLabel? = nil
 local actionRow: Frame? = nil
 
 local GAME_NAMES: { [string]: string } = {
@@ -94,6 +96,13 @@ local function present(title: string, body: string)
 	if bodyLabel then
 		bodyLabel.Text = body
 	end
+	if summaryLabel then
+		summaryLabel.Text = ""
+		summaryLabel.Visible = false
+	end
+	if panel then
+		panel.Size = UDim2.new(0.88, 0, 0, 290)
+	end
 	clearActions()
 	setVisible(true)
 end
@@ -101,6 +110,62 @@ end
 local function role(): string?
 	local value = Players.LocalPlayer:GetAttribute("BashRole")
 	return if type(value) == "string" then value else nil
+end
+
+local function keepsakeLines(summary: Payload): string
+	local lines = {}
+	local actGrades = summary.actGrades
+	if type(actGrades) == "table" then
+		for _, act in actGrades do
+			if type(act) == "table" and type(act.gameId) == "string" then
+				local grade = if type(act.grade) == "string" then act.grade else "—"
+				table.insert(lines, `{GAME_NAMES[act.gameId] or act.gameId}: {grade}`)
+			end
+		end
+	end
+	local cueGrade = if type(summary.directorCueGrade) == "string"
+		then summary.directorCueGrade
+		else "—"
+	table.insert(lines, `Director cue grade: {cueGrade}`)
+	if type(summary.bestAct) == "string" then
+		table.insert(lines, `Best act: {summary.bestAct}`)
+	end
+	if type(summary.dogPose) == "string" then
+		table.insert(lines, `Gigi + Rambo: {summary.dogPose}`)
+	end
+	return table.concat(lines, "\n")
+end
+
+local function presentKeepsake(payload: Payload, encoreHighlight: boolean?)
+	local summary = if type(payload.summary) == "table"
+		then payload.summary
+		elseif type(payload.performanceSummary) == "table" then payload.performanceSummary
+		else {}
+	local title = if type(summary.title) == "string" then summary.title else "A NIGHT TO KEEP"
+	local trophy = if type(summary.featuredTrophy) == "string"
+		then summary.featuredTrophy
+		else "Premiere Keepsake"
+	local moment = if type(summary.bestMoment) == "string"
+		then summary.bestMoment
+		else "A night made together"
+	present(if encoreHighlight then "ENCORE HIGHLIGHT" else title, `{trophy} · {moment}`)
+	if panel then
+		panel.Size = UDim2.new(0.88, 0, 0, 420)
+	end
+	if summaryLabel then
+		summaryLabel.Text = keepsakeLines(summary)
+		summaryLabel.Visible = true
+	end
+	local session = if type(payload.session) == "table" then payload.session else payload
+	local encoreRequested = encoreHighlight == true or session.encoreRequested == true
+	if role() == "Star" and not encoreRequested then
+		button("Encore", P.blush, function()
+			send("RequestEncore", {})
+		end)
+	end
+	button("Replay", P.sky, function()
+		send("ReplayShow", {})
+	end)
 end
 
 local function presentInvitation()
@@ -161,15 +226,7 @@ local function presentPhase(phase: string, payload: Payload)
 			send("SkipCinematic", {})
 		end)
 	elseif phase == "KeepsakeResult" then
-		present("A NIGHT TO KEEP", "Your Premiere keepsake is ready.")
-		if role() == "Star" then
-			button("Encore", P.blush, function()
-				send("RequestEncore", {})
-			end)
-		end
-		button("Replay", P.sky, function()
-			send("ReplayShow", {})
-		end)
+		presentKeepsake(payload, false)
 	end
 end
 
@@ -203,7 +260,7 @@ local function build()
 	card.Parent = shade
 	corner(card, 26)
 	local constraint = Instance.new("UISizeConstraint")
-	constraint.MaxSize = Vector2.new(620, 310)
+	constraint.MaxSize = Vector2.new(620, 440)
 	constraint.MinSize = Vector2.new(286, 270)
 	constraint.Parent = card
 
@@ -238,6 +295,20 @@ local function build()
 	body.TextWrapped = true
 	body.Parent = card
 
+	local summary = Instance.new("TextLabel")
+	summary.BackgroundTransparency = 1
+	summary.Font = Enum.Font.GothamMedium
+	summary.Position = UDim2.fromOffset(24, 172)
+	summary.Size = UDim2.new(1, -48, 0, 154)
+	summary.Text = ""
+	summary.TextColor3 = P.plum
+	summary.TextSize = 14
+	summary.TextWrapped = true
+	summary.TextXAlignment = Enum.TextXAlignment.Left
+	summary.TextYAlignment = Enum.TextYAlignment.Top
+	summary.Visible = false
+	summary.Parent = card
+
 	local row = Instance.new("Frame")
 	row.BackgroundTransparency = 1
 	row.Position = UDim2.new(0, 24, 1, -82)
@@ -253,6 +324,7 @@ local function build()
 	panel = card
 	titleLabel = title
 	bodyLabel = body
+	summaryLabel = summary
 	actionRow = row
 end
 
@@ -261,6 +333,7 @@ function ShowPresentation.start()
 		return
 	end
 	started = true
+	AccessibilityControls.start()
 	build()
 	Net.get(Net.ShowEvent).OnClientEvent:Connect(function(message: any)
 		if type(message) ~= "table" or type(message.event) ~= "string" then
@@ -272,7 +345,9 @@ function ShowPresentation.start()
 		elseif message.event == "ShowState" then
 			local session = payload.session
 			if type(session) == "table" and type(session.phase) == "string" then
-				presentPhase(session.phase, session)
+				local presentation = table.clone(session)
+				presentation.performanceSummary = payload.performanceSummary
+				presentPhase(session.phase, presentation)
 			end
 		elseif message.event == "PremierePhaseChanged" then
 			local phase = payload.phase
@@ -280,7 +355,9 @@ function ShowPresentation.start()
 				presentPhase(phase, payload)
 			end
 		elseif message.event == "KeepsakeResult" then
-			presentPhase("KeepsakeResult", payload)
+			presentKeepsake(payload, false)
+		elseif message.event == "EncoreRequested" then
+			presentKeepsake(payload, true)
 		end
 	end)
 end

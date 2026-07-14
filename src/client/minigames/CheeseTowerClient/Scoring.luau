@@ -122,4 +122,70 @@ function Scoring.configFor(difficulty: number): TowerConfig
 	}
 end
 
+-- Nudge the swinging cheese toward the support center (helpful micro-adjust).
+function Scoring.nudgeToward(
+	dropCenter: number,
+	supportCenter: number,
+	amount: number
+): (number, number)
+	local delta = supportCenter - dropCenter
+	if math.abs(delta) < 1e-6 then
+		return dropCenter, 1
+	end
+	local step = math.clamp(amount, 0.15, 2.5) * (if delta > 0 then 1 else -1)
+	if math.abs(step) > math.abs(delta) then
+		step = delta
+	end
+	local nudged = dropCenter + step
+	local alignment = 1 - math.clamp(math.abs(supportCenter - nudged) / 8, 0, 1)
+	return nudged, alignment
+end
+
+-- Rescue a near-miss: if overlap would fail but the miss is slight, place a thin wheel.
+function Scoring.rescueDrop(
+	supportCenter: number,
+	supportWidth: number,
+	dropCenter: number,
+	dropWidth: number,
+	combo: number
+): DropResult
+	local normal = Scoring.resolveDrop(supportCenter, supportWidth, dropCenter, dropWidth, combo)
+	if normal.placed then
+		-- Soft recenter when the stack is shaky but still standing.
+		if normal.wobble >= 0.35 then
+			return Scoring.resolveDrop(supportCenter, supportWidth, supportCenter, dropWidth, combo)
+		end
+		return normal
+	end
+
+	local halfSupport = supportWidth / 2
+	local halfDrop = dropWidth / 2
+	local gap = math.abs(dropCenter - supportCenter) - (halfSupport + halfDrop)
+	if gap > 1.75 then
+		return normal
+	end
+
+	local rescuedWidth = math.max(Scoring.MinWidth * 0.75, supportWidth * 0.55)
+	return {
+		placed = true,
+		perfect = false,
+		newCenter = supportCenter,
+		newWidth = rescuedWidth,
+		overhang = math.max(0, dropWidth - rescuedWidth),
+		points = 1,
+		wobble = 0.55,
+	}
+end
+
+-- Soft bank of the current tower: bonus scales with height, never punitive.
+function Scoring.bankPoints(height: number, score: number): number
+	local safeHeight = math.max(0, height)
+	return math.floor(score * 0.1 + safeHeight * 2 + 0.5)
+end
+
+-- Topper places a celebratory finish wheel; multiplier for its points.
+function Scoring.topperMultiplier(risky: boolean): number
+	return if risky then 2 else 1.5
+end
+
 return Scoring

@@ -1,6 +1,6 @@
 --!strict
 
--- Director client networking boundary. DirectorPanel emits intent; this
+-- Director client networking boundary. DirectorShell emits intent; this
 -- controller sends commands and renders only server events.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -49,6 +49,10 @@ function DirectorController.start()
 			panel:pushMoment(payload)
 		elseif event == "DirectorCardPlayed" then
 			panel:cardPlayed(payload)
+		elseif event == "IngressHealth" then
+			panel:setConnectionHealth(payload)
+		elseif event == "DebugTelemetryChanged" then
+			panel:setDebugTelemetry(payload.enabled == true)
 		elseif event == "MinigameComplete" then
 			panel:setNotice("Act complete. The result is authoritative.", false)
 		elseif event == "MinigameEnded" then

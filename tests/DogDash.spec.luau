@@ -157,6 +157,55 @@ do
 	check("finish: no further events while finished", #second == 0)
 end
 
+-- 8. Jump clears puddles; Charge and SwitchDog mutate state.
+do
+	local state = Logic.newState(0)
+	local config = Logic.configFor(0)
+	config.spawnInterval = 999
+	local now = 10
+	check("jump: arms", Logic.jump(state, now))
+	check("jump: active", Logic.isJumping(state, now + 0.1))
+	state.entities = {
+		{ id = 1, kind = "Puddle", lane = state.lane, z = 1 },
+	}
+	state.nextId = 2
+	state.score = 20
+	local events = Logic.tick(state, 0.2, config, now + 0.1)
+	local hit = false
+	for _, event in events do
+		if event.kind == "Hit" then
+			hit = true
+		end
+	end
+	check("jump: puddle cleared without hit", not hit)
+	check("jump: score preserved", state.score == 20)
+
+	local state2 = Logic.newState(0)
+	check("charge: arms", Logic.charge(state2, 5))
+	check("charge: active", Logic.isCharging(state2, 5.2))
+	local lead = Logic.switchDog(state2)
+	check("switch: flips lead", lead == 2)
+	check("switch: toggles back", Logic.switchDog(state2) == 1)
+end
+
+-- 9. Seeded spawns are repeatable for the same seed.
+do
+	local a = Logic.newState(0, 99)
+	local b = Logic.newState(0, 99)
+	local config = Logic.configFor(0)
+	config.spawnInterval = 0.01
+	-- Initial spawnTimer is 0.35; advance past it so the first spawn fires.
+	local firstA = Logic.tick(a, 0.4, config, 0)
+	local firstB = Logic.tick(b, 0.4, config, 0)
+	local spawnA = firstA[1]
+	local spawnB = firstB[1]
+	check("seed: both spawned", spawnA ~= nil and spawnB ~= nil and spawnA.kind == "Spawn")
+	if spawnA and spawnB and spawnA.kind == "Spawn" and spawnB.kind == "Spawn" then
+		check("seed: same lane", spawnA.entity.lane == spawnB.entity.lane)
+		check("seed: same kind", spawnA.entity.kind == spawnB.entity.kind)
+	end
+end
+
 if failed > 0 then
 	error(`DogDash.spec: {failed} check(s) failed ({passed} passed)`)
 end

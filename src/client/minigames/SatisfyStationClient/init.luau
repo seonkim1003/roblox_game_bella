@@ -22,12 +22,16 @@ local COLORS = {
 	Slice = Color3.fromRGB(255, 170, 210),
 	Squish = Color3.fromRGB(170, 220, 255),
 	Pop = Color3.fromRGB(255, 230, 140),
+	Peel = Color3.fromRGB(190, 255, 170),
+	Pipe = Color3.fromRGB(180, 160, 255),
 }
 
 local running = false
 local ctx: Types.ClientContext? = nil
 local disconnectPrimary: (() -> ())? = nil
 local disconnectSlice: (() -> ())? = nil
+local disconnectSecondary: (() -> ())? = nil
+local disconnectTertiary: (() -> ())? = nil
 local stageFolder: Folder? = nil
 local itemParts: { [number]: BasePart } = {}
 local itemLabels: { [number]: string } = {}
@@ -35,6 +39,48 @@ local state: Logic.State? = nil
 local config = Logic.configFor(0.5)
 local savedCameraType: Enum.CameraType? = nil
 local suppressPrimaryUntil = 0
+local lastTelemetryAt = 0
+local dreamBoost = 0
+local cardToken = 0
+
+local function publishTelemetry(objectTag: string?)
+	if not ctx or not state then
+		return
+	end
+	local now = os.clock()
+	if now - lastTelemetryAt < 0.2 then
+		return
+	end
+	lastTelemetryAt = now
+	local remaining = Logic.remaining(state)
+	local progress = if #state.items > 0 then state.resolvedCount / #state.items else 1
+	local tag = objectTag or `remaining:{remaining}`
+	local accuracy = math.clamp(0.5 + state.combo * 0.06, 0, 1)
+	StarController.publishRoundTelemetry("Score", state.score, tag)
+	StarController.publishRoundTelemetry("Progress", progress, tag)
+	StarController.publishRoundTelemetry("Combo", state.combo, tag)
+	StarController.publishRoundTelemetry("Flow", math.clamp(0.55 + progress * 0.4, 0, 1), tag)
+	StarController.publishRoundTelemetry("Accuracy", accuracy, tag)
+	StarController.publishRoundTelemetry("ProjectedGrade", accuracy * 100, tag)
+end
+
+local function applyCard(cardId: string, duration: number, strength: number)
+	cardToken += 1
+	local token = cardToken
+	if cardId == "DreamModeBoost" then
+		dreamBoost = 0.25 * strength
+	elseif cardId == "SlowMotion" then
+		dreamBoost = math.max(dreamBoost, 0.15 * strength)
+	elseif cardId == "ConfettiFinish" and ctx then
+		ctx.feedback.confetti({ amount = 30 })
+	end
+	task.delay(duration, function()
+		if token ~= cardToken then
+			return
+		end
+		dreamBoost = 0
+	end)
+end
 
 local function destroyStage()
 	if stageFolder then
@@ -64,17 +110,21 @@ local function updateCamera()
 		CFrame.new(STAGE_ORIGIN + Vector3.new(0, 12, 16), STAGE_ORIGIN + Vector3.new(0, 1, 0))
 end
 
-local function reportLive(detail: string?)
+local function reportLive(detail: string?, comboBroken: boolean?)
 	if not ctx or not state then
 		return
 	end
+	local remaining = Logic.remaining(state)
 	ctx.reportScore(state.score, {
 		detail = detail or (if state.combo > 1 then `combo x{state.combo}` else "tray"),
 		combo = state.combo,
-		remaining = Logic.remaining(state),
+		comboBroken = comboBroken == true,
+		perfect = type(detail) == "string" and string.find(detail, "perfect", 1, true) ~= nil,
+		remaining = remaining,
 		finished = state.finished,
 		progress = if #state.items > 0 then state.resolvedCount / #state.items else 1,
 	})
+	publishTelemetry(`remaining:{remaining}`)
 end
 
 local function layoutForIndex(index: number, total: number): Vector3
@@ -93,12 +143,16 @@ local function makeItemPart(item: Logic.Item, index: number, total: number): Bas
 	part.Anchored = true
 	part.CanCollide = false
 	part.Material = Enum.Material.SmoothPlastic
-	part.Color = COLORS[item.kind]
+	part.Color = COLORS[item.kind] or COLORS.Pop
 	if item.kind == "Pop" then
 		part.Shape = Enum.PartType.Ball
 		part.Size = Vector3.new(1.6, 1.6, 1.6)
 	elseif item.kind == "Squish" then
 		part.Size = Vector3.new(1.8, 1.2, 1.8)
+	elseif item.kind == "Peel" then
+		part.Size = Vector3.new(2.2, 0.35, 1.6)
+	elseif item.kind == "Pipe" then
+		part.Size = Vector3.new(0.9, 2.0, 0.9)
 	else
 		part.Size = Vector3.new(2.1, 0.9, 1.4)
 	end
@@ -125,10 +179,10 @@ local function makeItemPart(item: Logic.Item, index: number, total: number): Bas
 	return part
 end
 
-local function beginRound(difficulty: number)
+local function beginRound(difficulty: number, seed: number?, traySize: number?)
 	destroyStage()
 	config = Logic.configFor(difficulty)
-	state = Logic.newState(difficulty)
+	state = Logic.newState(difficulty, nil, seed, traySize)
 	suppressPrimaryUntil = 0
 
 	local folder = Instance.new("Folder")
@@ -184,7 +238,7 @@ local function resolveVisual(itemId: number, result: Logic.ActionResult, action:
 	local part = itemParts[itemId]
 	local pos = if part then part.Position else STAGE_ORIGIN
 	if result.accepted then
-		if action == "Slice" then
+		if action == "Slice" or action == "Trace" then
 			ctx.sound.play("squelch", { speed = 1.15 })
 			ctx.feedback.pop(pos, { color = COLORS.Slice, count = 18 })
 		elseif action == "Squish" then
@@ -193,6 +247,13 @@ local function resolveVisual(itemId: number, result: Logic.ActionResult, action:
 			end
 			ctx.sound.play("squelch")
 			ctx.feedback.pop(pos, { color = COLORS.Squish, count = 12 })
+		elseif action == "Peel" then
+			ctx.sound.play("peel")
+			ctx.feedback.pop(pos, { color = COLORS.Peel, count = 16 })
+		elseif action == "Pipe" then
+			ctx.sound.play("pipe")
+			ctx.feedback.pop(pos, { color = COLORS.Pipe, count = 14 })
+			ctx.feedback.cameraKick(0.15)
 		else
 			ctx.sound.play("pop", { speed = 1.25 })
 			ctx.feedback.pop(pos, { color = COLORS.Pop, count = 22 })
@@ -216,6 +277,7 @@ local function resolveVisual(itemId: number, result: Logic.ActionResult, action:
 		end
 	else
 		ctx.sound.play("wobble", { volume = 0.18 })
+		ctx.feedback.cameraKick(if result.comboBroken then 0.35 else 0.18)
 		if part then
 			TweenService:Create(
 				part,
@@ -227,8 +289,9 @@ local function resolveVisual(itemId: number, result: Logic.ActionResult, action:
 
 	local detail = if result.accepted
 		then (if result.perfect then `perfect {action}` else action)
+		elseif result.comboBroken then "combo broken"
 		else "miss"
-	reportLive(detail)
+	reportLive(detail, result.comboBroken)
 
 	if result.finished then
 		local hud = StarController.getHud()
@@ -308,8 +371,17 @@ local function perform(action: Logic.ActionKind)
 	if not itemId then
 		return
 	end
-	local result = Logic.applyAction(state, itemId, action, now, config)
+	local boostedConfig = table.clone(config)
+	boostedConfig.comboWindow = config.comboWindow + dreamBoost
+	boostedConfig.perfectWindow = config.perfectWindow + dreamBoost * 0.5
+	local result = Logic.applyAction(state, itemId, action, now, boostedConfig)
+	local quality = if result.accepted then (if result.perfect then 1 else 0.7) else 0.15
+	StarController.sendRoundAction(Logic.roundActionFor(action) :: Types.RoundAction, quality)
+	publishTelemetry(`object:{action}`)
 	resolveVisual(itemId, result, action)
+	if result.finished then
+		StarController.sendRoundAction("Complete", state.score)
+	end
 end
 
 local function stopStation()
@@ -322,9 +394,19 @@ local function stopStation()
 		disconnectSlice()
 		disconnectSlice = nil
 	end
+	if disconnectSecondary then
+		disconnectSecondary()
+		disconnectSecondary = nil
+	end
+	if disconnectTertiary then
+		disconnectTertiary()
+		disconnectTertiary = nil
+	end
 	destroyStage()
 	restoreCamera()
 	ctx = nil
+	dreamBoost = 0
+	StarController.clearSoftActions()
 	local hud = StarController.getHud()
 	hud:setHint("")
 end
@@ -335,6 +417,8 @@ local SatisfyStationClient: Types.MinigameClient = {
 	start = function(_self, clientCtx)
 		ctx = clientCtx
 		running = true
+		dreamBoost = 0
+		lastTelemetryAt = 0
 
 		clientCtx.onEvent(function(event: string, payload: { [string]: any }?)
 			if not running then
@@ -344,13 +428,30 @@ local SatisfyStationClient: Types.MinigameClient = {
 				local difficulty = if payload and type(payload.difficulty) == "number"
 					then payload.difficulty
 					else 0.5
-				beginRound(difficulty)
+				local seed = if payload and type(payload.seed) == "number"
+					then payload.seed
+					else nil
+				local traySize = if payload and type(payload.traySize) == "number"
+					then payload.traySize
+					else nil
+				beginRound(difficulty, seed, traySize)
 			elseif event == "SatisfyStationDifficulty" then
 				if payload and type(payload.difficulty) == "number" then
 					applyDifficulty(payload.difficulty)
 				end
 			elseif event == "SatisfyStationEnd" then
 				stopStation()
+			elseif event == "SatisfyStationCard" or event == "DirectorCardPlayed" then
+				local cardId = payload and payload.cardId
+				if type(cardId) == "string" then
+					local duration = if payload and type(payload.duration) == "number"
+						then payload.duration
+						else 4
+					local strength = if payload and type(payload.strength) == "number"
+						then payload.strength
+						else 1
+					applyCard(cardId, duration, strength)
+				end
 			end
 		end)
 
@@ -362,12 +463,17 @@ local SatisfyStationClient: Types.MinigameClient = {
 		if disconnectSlice then
 			disconnectSlice()
 		end
+		if disconnectSecondary then
+			disconnectSecondary()
+		end
+		if disconnectTertiary then
+			disconnectTertiary()
+		end
 
 		disconnectPrimary = input:on("Primary", function()
 			if os.clock() < suppressPrimaryUntil then
 				return
 			end
-			-- Tap/controller A: prefer Pop, then Squish (Slice wants a drag).
 			local itemId = pickNearestItem("Pop") or pickNearestItem("Squish")
 			if not itemId or not state then
 				return
@@ -380,16 +486,46 @@ local SatisfyStationClient: Types.MinigameClient = {
 		end)
 
 		disconnectSlice = input:on("Slice", function()
-			-- Drag / controller X|B just finished — don't also treat as a tap.
 			suppressPrimaryUntil = os.clock() + 0.12
 			perform("Slice")
 		end)
 
+		disconnectSecondary = input:on("Secondary", function()
+			if os.clock() < suppressPrimaryUntil then
+				return
+			end
+			local itemId = pickNearestItem("Peel")
+			if itemId then
+				perform("Peel")
+			elseif ctx then
+				ctx.sound.play("nudge", { volume = 0.08 })
+			end
+		end)
+
+		disconnectTertiary = input:on("Tertiary", function()
+			if os.clock() < suppressPrimaryUntil then
+				return
+			end
+			local itemId = pickNearestItem("Pipe")
+			if itemId then
+				perform("Pipe")
+			elseif ctx then
+				ctx.sound.play("nudge", { volume = 0.08 })
+			end
+		end)
+
 		local hud = StarController.getHud()
-		hud:setHint("Tap to pop/squish · drag to slice · keep a gentle combo")
+		hud:setHint("Tap pop/squish · drag slice · soft buttons for peel / pipe")
+		StarController.setSoftActions({
+			{ id = "Primary", label = "Pop" },
+			{ id = "Secondary", label = "Peel" },
+			{ id = "Tertiary", label = "Pipe" },
+			{ id = "Slice", label = "Slice" },
+		})
 	end,
 
 	stop = function(_self)
+		StarController.clearSoftActions()
 		stopStation()
 	end,
 }

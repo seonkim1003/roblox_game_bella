@@ -221,6 +221,9 @@ function ShowSession.requestEncore(state: State): Transition
 	if state.phase ~= "KeepsakeResult" then
 		return reject(state, "encore is only available from the keepsake")
 	end
+	if state.encoreRequested then
+		return reject(state, "encore was already requested")
+	end
 	local nextState = clone(state)
 	nextState.encoreRequested = true
 	nextState.revision += 1

@@ -1,18 +1,27 @@
 --!strict
--- Touch + keyboard/mouse abstraction for Bella's controls.
+-- Touch + keyboard/mouse + controller abstraction for Bella's controls.
 -- Minigames subscribe to named actions; they never touch UserInputService directly.
 
 local UserInputService = game:GetService("UserInputService")
 
-export type ActionName = "Drop" | "Left" | "Right" | "Primary" | "Slice"
+export type ActionName =
+	"Drop"
+	| "Left"
+	| "Right"
+	| "Primary"
+	| "Slice"
+	| "Secondary"
+	| "Tertiary"
+	| "Switch"
 
 export type InputRouterApi = {
 	start: (self: InputRouterApi) -> (),
 	stop: (self: InputRouterApi) -> (),
 	on: (self: InputRouterApi, action: ActionName, callback: () -> ()) -> () -> (),
 	setEnabled: (self: InputRouterApi, enabled: boolean) -> (),
-	-- Latest pointer position in screen pixels (mouse or primary touch), if any.
 	getPointer: (self: InputRouterApi) -> Vector2?,
+	-- Soft-button / HUD path so touch players can fire non-swipe verbs.
+	emit: (self: InputRouterApi, action: ActionName) -> (),
 }
 
 local InputRouter = {}
@@ -33,8 +42,6 @@ local function fire(self: any, action: ActionName)
 		return
 	end
 	for _, callback in list do
-		-- Synchronous dispatch so a Drop handler can set its own re-entrancy
-		-- guard before a second mirrored touch/mouse event is processed.
 		callback()
 	end
 end
@@ -73,10 +80,7 @@ function InputRouter.start(self: any)
 				self._pointer = Vector2.new(input.Position.X, input.Position.Y)
 				self._dragOrigin = self._pointer
 				self._dragPointerType = input.UserInputType
-				local drop: ActionName = "Drop"
-				local primary: ActionName = "Primary"
-				fire(self, drop)
-				fire(self, primary)
+				-- Defer Drop/Primary until ended so a drag can become Slice without a false tap.
 				return
 			end
 
@@ -84,16 +88,9 @@ function InputRouter.start(self: any)
 				self._pointer = Vector2.new(input.Position.X, input.Position.Y)
 				self._dragOrigin = self._pointer
 				self._dragPointerType = input.UserInputType
-				-- TouchBegan fires per finger; treat as Drop/Primary.
-				local drop: ActionName = "Drop"
-				local primary: ActionName = "Primary"
-				fire(self, drop)
-				fire(self, primary)
 				return
 			end
 
-			-- Inline key → action (no function return) so the ActionName singleton
-			-- union survives luau-lsp; see RoleService for the same gotcha.
 			local keyCode = input.KeyCode
 			if keyCode == Enum.KeyCode.Space or keyCode == Enum.KeyCode.ButtonA then
 				local drop: ActionName = "Drop"
@@ -115,9 +112,32 @@ function InputRouter.start(self: any)
 				local right: ActionName = "Right"
 				fire(self, right)
 			elseif keyCode == Enum.KeyCode.ButtonX or keyCode == Enum.KeyCode.ButtonB then
-				-- Controller "slice" affordance for Satisfy Station.
 				local slice: ActionName = "Slice"
 				fire(self, slice)
+			elseif
+				keyCode == Enum.KeyCode.R
+				or keyCode == Enum.KeyCode.ButtonY
+				or keyCode == Enum.KeyCode.E
+			then
+				-- Rescue / Jump / Peel
+				local secondary: ActionName = "Secondary"
+				fire(self, secondary)
+			elseif
+				keyCode == Enum.KeyCode.F
+				or keyCode == Enum.KeyCode.ButtonL1
+				or keyCode == Enum.KeyCode.LeftShift
+			then
+				-- Bank / Charge / Pipe
+				local tertiary: ActionName = "Tertiary"
+				fire(self, tertiary)
+			elseif
+				keyCode == Enum.KeyCode.Tab
+				or keyCode == Enum.KeyCode.ButtonR1
+				or keyCode == Enum.KeyCode.Q
+			then
+				-- SwitchDog / Topper
+				local switchAction: ActionName = "Switch"
+				fire(self, switchAction)
 			end
 		end)
 	)
@@ -159,42 +179,25 @@ function InputRouter.start(self: any)
 			local ended = Vector2.new(input.Position.X, input.Position.Y)
 			self._pointer = ended
 			local delta = ended - origin
-			if delta.Magnitude >= SLICE_THRESHOLD then
+			local absX = math.abs(delta.X)
+			local absY = math.abs(delta.Y)
+			-- Lane swipe wins over tap/slice when clearly horizontal.
+			if absX >= 40 and absX > absY then
+				if delta.X > 0 then
+					local right: ActionName = "Right"
+					fire(self, right)
+				else
+					local left: ActionName = "Left"
+					fire(self, left)
+				end
+			elseif delta.Magnitude >= SLICE_THRESHOLD then
 				local slice: ActionName = "Slice"
 				fire(self, slice)
-			end
-		end)
-	)
-
-	-- Horizontal swipe for Left/Right without hijacking Drop taps.
-	local swipeStart: Vector3? = nil
-	table.insert(
-		self._connections,
-		UserInputService.TouchStarted:Connect(function(touch: InputObject, _gp: boolean)
-			if not self._enabled then
-				return
-			end
-			swipeStart = touch.Position
-		end)
-	)
-	table.insert(
-		self._connections,
-		UserInputService.TouchEnded:Connect(function(touch: InputObject, _gp: boolean)
-			if not self._enabled or not swipeStart then
-				swipeStart = nil
-				return
-			end
-			local delta = touch.Position - swipeStart
-			swipeStart = nil
-			if math.abs(delta.X) < 40 or math.abs(delta.X) < math.abs(delta.Y) then
-				return
-			end
-			if delta.X > 0 then
-				local right: ActionName = "Right"
-				fire(self, right)
 			else
-				local left: ActionName = "Left"
-				fire(self, left)
+				local drop: ActionName = "Drop"
+				local primary: ActionName = "Primary"
+				fire(self, drop)
+				fire(self, primary)
 			end
 		end)
 	)
@@ -240,6 +243,13 @@ end
 
 function InputRouter.setEnabled(self: any, enabled: boolean)
 	self._enabled = enabled
+end
+
+function InputRouter.emit(self: any, action: ActionName)
+	if not self._enabled then
+		return
+	end
+	fire(self, action)
 end
 
 return InputRouter

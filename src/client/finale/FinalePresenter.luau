@@ -14,6 +14,7 @@ local VisualConfig = require(Shared.VisualConfig)
 
 local Feedback = require(script.Parent.Parent.juice.Feedback)
 local SoundKit = require(script.Parent.Parent.juice.SoundKit)
+local AccessibilitySettings = require(script.Parent.AccessibilitySettings)
 
 type Payload = { [string]: any }
 
@@ -33,6 +34,12 @@ local previousCameraSubject: Instance? = nil
 local previousCameraCFrame: CFrame? = nil
 
 local function tween(object: Instance, duration: number, properties: { [string]: any })
+	if AccessibilitySettings.get().reducedMotion then
+		for property, value in properties do
+			(object :: any)[property] = value
+		end
+		return nil
+	end
 	local value = TweenService:Create(
 		object,
 		TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
@@ -40,6 +47,34 @@ local function tween(object: Instance, duration: number, properties: { [string]:
 	)
 	value:Play()
 	return value
+end
+
+local function playSound(name: string, visualLabel: string)
+	if AccessibilitySettings.get().mutedAudio then
+		AccessibilitySettings.emitSoundCue(visualLabel)
+	else
+		SoundKit.play(name, nil)
+	end
+end
+
+local function gentleConfetti()
+	if not AccessibilitySettings.get().reducedMotion then
+		Feedback.confetti({ gentle = true })
+	end
+end
+
+local function performanceConfetti(summary: Payload?)
+	if AccessibilitySettings.get().reducedMotion then
+		return
+	end
+	local treatment = if summary then summary.confettiTreatment else nil
+	Feedback.confetti({
+		gentle = treatment ~= "StarlightCascade",
+		amount = if treatment == "StarlightCascade"
+			then 56
+			elseif treatment == "RibbonDrift" then 34
+			else 20,
+	})
 end
 
 local function mount()
@@ -184,7 +219,7 @@ local function validLines(raw: any): { string }
 	return lines
 end
 
-local function begin(lines: { string })
+local function begin(lines: { string }, summary: Payload?)
 	if active then
 		return
 	end
@@ -203,6 +238,11 @@ local function begin(lines: { string })
 	end
 
 	screen.Enabled = true
+	if summary and type(summary.title) == "string" then
+		title.Text = string.upper(summary.title)
+	else
+		title.Text = "ONE LAST SURPRISE"
+	end
 	backdrop.BackgroundTransparency = 1
 	title.TextTransparency = 1
 	message.TextTransparency = 1
@@ -210,7 +250,7 @@ local function begin(lines: { string })
 	tween(backdrop, 2.2, { BackgroundTransparency = 0.42 })
 	tween(title, 1.5, { TextTransparency = 0.15 })
 	tween(card, 1.8, { BackgroundTransparency = 0.2 })
-	SoundKit.play("softChime", nil)
+	playSound("softChime", "Soft chime")
 	focusCamera(token)
 
 	task.spawn(function()
@@ -222,7 +262,7 @@ local function begin(lines: { string })
 			message.Text = line
 			message.TextTransparency = 1
 			tween(message, 0.65, { TextTransparency = 0 })
-			SoundKit.play("softChime", nil)
+			playSound("softChime", "Message chime")
 			task.wait(2.5)
 			tween(message, 0.5, { TextTransparency = 1 })
 			task.wait(0.55)
@@ -230,16 +270,26 @@ local function begin(lines: { string })
 		if token ~= generation then
 			return
 		end
+		if summary and type(summary.ratthewCallback) == "string" then
+			message.Text = summary.ratthewCallback
+			message.TextTransparency = 1
+			tween(message, 0.65, { TextTransparency = 0 })
+			playSound("softChime", "Ratthew chime")
+			task.wait(2.5)
+			tween(message, 0.5, { TextTransparency = 1 })
+			task.wait(0.55)
+		end
 		message.Text = `Happy Birthday, {Config.starName}.`
 		message.TextTransparency = 1
 		tween(message, 1.1, { TextTransparency = 0 })
-		Feedback.confetti({ gentle = true })
-		SoundKit.play("cheer", nil)
+		performanceConfetti(summary)
+		playSound("cheer", "Birthday cheer")
 	end)
 end
 
 function FinalePresenter.start(_self: any, payload: Payload)
-	begin(validLines(payload.messageLines))
+	local summary = if type(payload.summary) == "table" then payload.summary else nil
+	begin(validLines(payload.messageLines), summary)
 end
 
 function FinalePresenter.beat(_self: any, beat: string, _payload: Payload?)
@@ -247,10 +297,10 @@ function FinalePresenter.beat(_self: any, beat: string, _payload: Payload?)
 		return
 	end
 	if beat == "BroodingGuest" then
-		SoundKit.play("softChime", nil)
+		playSound("softChime", "Guest reveal chime")
 	elseif beat == "HappyBirthday" then
-		Feedback.confetti({ gentle = true })
-		SoundKit.play("cheer", nil)
+		gentleConfetti()
+		playSound("cheer", "Birthday cheer")
 	end
 end
 

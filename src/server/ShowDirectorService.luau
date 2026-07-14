@@ -10,6 +10,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = require(Shared.Config)
 local Net = require(Shared.Net)
 local ContractValidation = require(Shared.ContractValidation)
 local ShowConstants = require(Shared.ShowConstants)
@@ -18,7 +19,10 @@ local Types = require(Shared.Types)
 
 local RoleService = require(script.Parent.RoleService)
 local FinaleService = require(script.Parent.FinaleService)
+local DirectorEffectDispatch = require(script.Parent.DirectorEffectDispatch)
 local DirectorStrategy = require(script.Parent.DirectorStrategy)
+local IngressHealth = require(script.Parent.IngressHealth)
+local PerformanceSummary = require(script.Parent.PerformanceSummary)
 local ShowState = require(script.Parent.ShowState)
 local ShowSession = require(script.Parent.ShowSession)
 local SurpriseService = require(script.Parent.SurpriseService)
@@ -53,6 +57,8 @@ local ACTION_INTERVALS: { [string]: number } = {
 	AdvanceShow = 0.5,
 	UseCard = 0.2,
 	Predict = 0.5,
+	SetDebugTelemetry = 0.25,
+	DebugLaunch = 1,
 	RequestEncore = 1,
 	ReplayShow = 2,
 }
@@ -76,6 +82,10 @@ local lastShowrunnerAt = 0
 local started = false
 local advancePremiere: (reason: string) -> (boolean, string?)
 local debugSeedOverride: number? = nil
+local ingressRejectionCounts: IngressHealth.Counts = IngressHealth.new()
+local ingressRecoveryPending = false
+local lastIngressNoticeAt = 0
+local activePerformanceSummary: PerformanceSummary.Summary? = nil
 
 local function sendEvent(player: Player, event: string, payload: Payload?)
 	if player.Parent ~= Players then
@@ -86,6 +96,46 @@ end
 
 local function broadcast(event: string, payload: Payload?)
 	Net.get(Net.ShowEvent):FireAllClients({ event = event, payload = payload })
+end
+
+local function sendIngressHealth(status: string, kind: string?, reason: string?)
+	local director = RoleService.getDirector()
+	if not director then
+		return
+	end
+	sendEvent(director, "IngressHealth", {
+		status = status,
+		kind = kind,
+		reason = reason,
+		counts = ingressRejectionCounts,
+		total = IngressHealth.total(ingressRejectionCounts),
+		roundId = if activeRoundConfig then activeRoundConfig.roundId else nil,
+	})
+end
+
+local function recordIngressRejection(kind: string, reason: string?)
+	local category: string
+	ingressRejectionCounts, category = IngressHealth.record(ingressRejectionCounts, reason)
+	ingressRecoveryPending = true
+	local now = workspace:GetServerTimeNow()
+	if now - lastIngressNoticeAt < 0.25 then
+		return
+	end
+	lastIngressNoticeAt = now
+	sendIngressHealth("Rejected", kind, category)
+end
+
+local function recordIngressAccepted()
+	if not ingressRecoveryPending then
+		return
+	end
+	local now = workspace:GetServerTimeNow()
+	if now - lastIngressNoticeAt < 0.5 then
+		return
+	end
+	ingressRecoveryPending = false
+	lastIngressNoticeAt = now
+	sendIngressHealth("Healthy", nil, nil)
 end
 
 local function isFinite(value: number): boolean
@@ -125,6 +175,7 @@ local function statePayload(reason: string): Payload
 		starName = if star then star.DisplayName else nil,
 		directorConnected = director ~= nil,
 		availableMinigames = availableMinigames(),
+		performanceSummary = activePerformanceSummary,
 		runId = if activeMinigame then activeRunToken else nil,
 		reason = reason,
 		session = ShowSession.snapshot(session),
@@ -134,8 +185,14 @@ local function statePayload(reason: string): Payload
 			hand = DirectorStrategy.handView(strategy, session.phase, state.activeMinigame),
 			prediction = strategy.prediction,
 			predictionResolved = strategy.predictionResolved,
+			predictionMatched = strategy.predictionMatched,
 			cueGrade = DirectorStrategy.cueGrade(strategy),
 			showrunnerFallback = director == nil,
+			ingressHealth = {
+				counts = ingressRejectionCounts,
+				total = IngressHealth.total(ingressRejectionCounts),
+				recoveryPending = ingressRecoveryPending,
+			},
 		},
 	}
 end
@@ -396,6 +453,10 @@ local function launchMinigame(player: Player, id: string)
 	}
 	debugSeedOverride = nil
 	activeRoundConfig = roundConfig
+	strategy = DirectorStrategy.resetPrediction(strategy)
+	ingressRejectionCounts = IngressHealth.new()
+	ingressRecoveryPending = false
+	lastIngressNoticeAt = 0
 	table.clear(lastInputSequence)
 
 	broadcast("PhaseChanged", { phase = session.phase })
@@ -478,6 +539,36 @@ local function queueAct(player: Player, requestedId: string): (boolean, string?)
 	return true, nil
 end
 
+local function buildPerformanceSummary(): PerformanceSummary.Summary
+	return PerformanceSummary.build(session.results :: any, {
+		starName = Config.starName,
+		mood = session.mood,
+		directorCueGrade = DirectorStrategy.cueGrade(strategy),
+		finaleEnergy = strategy.finaleEnergy,
+	})
+end
+
+local function completeHeadlinerFinale(reason: string): (boolean, string?)
+	if session.phase ~= "HeadlinerFinale" then
+		return false, "The finale is not active"
+	end
+	local transition = ShowSession.completeFinale(session, workspace:GetServerTimeNow())
+	if transition.error then
+		return false, transition.error
+	end
+	activePerformanceSummary = activePerformanceSummary or buildPerformanceSummary()
+	session = transition.state
+	FinaleService.cancel()
+	broadcast("PremierePhaseChanged", { phase = session.phase, revision = session.revision })
+	broadcast("KeepsakeResult", {
+		session = ShowSession.snapshot(session),
+		summary = activePerformanceSummary,
+		reason = reason,
+	})
+	publishState(reason)
+	return true, nil
+end
+
 local function startHeadlinerFinale(): (boolean, string?)
 	if session.phase ~= "HeadlinerFinale" then
 		return false, "Complete all three acts first"
@@ -492,12 +583,20 @@ local function startHeadlinerFinale(): (boolean, string?)
 	end
 	local previousState = state
 	state = transition.state
+	activePerformanceSummary = buildPerformanceSummary()
 	local success, finaleStarted, reason = pcall(function()
-		local didBegin, finaleReason = FinaleService.begin(star)
+		local didBegin, finaleReason = FinaleService.begin(
+			star,
+			activePerformanceSummary :: any,
+			function()
+				completeHeadlinerFinale("FinaleComplete")
+			end
+		)
 		return didBegin, finaleReason
 	end)
 	if not success or not finaleStarted then
 		state = previousState
+		activePerformanceSummary = nil
 		FinaleService.cancel()
 		return false,
 			if success and type(reason) == "string" then reason else "The finale could not start"
@@ -611,7 +710,12 @@ local function handleCommand(player: Player, command: any)
 			})
 			if reachedKeepsake then
 				FinaleService.cancel()
-				broadcast("KeepsakeResult", { session = ShowSession.snapshot(session) })
+				activePerformanceSummary = activePerformanceSummary or buildPerformanceSummary()
+				broadcast("KeepsakeResult", {
+					session = ShowSession.snapshot(session),
+					summary = activePerformanceSummary,
+					reason = "FinaleSkipped",
+				})
 			end
 			publishState("FinaleSkipConfirmed")
 			accept(player, action)
@@ -660,7 +764,10 @@ local function handleCommand(player: Player, command: any)
 		end
 		session = transition.state
 		strategy = DirectorStrategy.requestEncore(strategy)
-		broadcast("EncoreRequested", {})
+		broadcast("EncoreRequested", {
+			summary = activePerformanceSummary,
+			replayIndex = 1,
+		})
 		publishState("EncoreRequested")
 		accept(player, action)
 		return
@@ -674,6 +781,7 @@ local function handleCommand(player: Player, command: any)
 			return
 		end
 		FinaleService.cancel()
+		activePerformanceSummary = nil
 		state = ShowState.transition(ShowState.new(state.difficulty), "StartHub", nil).state
 		session = transition.state
 		strategy = DirectorStrategy.new(
@@ -689,7 +797,50 @@ local function handleCommand(player: Player, command: any)
 	if role ~= "Director" then
 		return
 	end
-	if action == "UseCard" then
+	if action == "SetDebugTelemetry" then
+		if not RunService:IsStudio() then
+			reject(player, action, "Studio-only control")
+			return
+		end
+		local enabled = if payload then payload.enabled else nil
+		if type(enabled) ~= "boolean" then
+			reject(player, action, "Choose whether fake telemetry is enabled")
+			return
+		end
+		game:SetAttribute("BashFakeTelemetry", enabled)
+		sendEvent(player, "DebugTelemetryChanged", { enabled = enabled })
+		accept(player, action, if enabled then "enabled" else "disabled")
+		return
+	elseif action == "DebugLaunch" then
+		if not RunService:IsStudio() then
+			reject(player, action, "Studio-only control")
+			return
+		end
+		local gameId = if payload then payload.gameId else nil
+		local seed = if payload then payload.seed else nil
+		if type(gameId) ~= "string" or not isKnownMinigameId(gameId) then
+			reject(player, action, "Choose a valid Studio act")
+			return
+		end
+		if type(seed) ~= "number" or not isFinite(seed) or seed % 1 ~= 0 then
+			reject(player, action, "Seed must be a whole number")
+			return
+		end
+		local fakeTelemetry = if payload then payload.fakeTelemetry else nil
+		if type(fakeTelemetry) == "boolean" then
+			game:SetAttribute("BashFakeTelemetry", fakeTelemetry)
+		end
+		local launched, reason = ShowDirectorService.debugLaunch(gameId, seed)
+		if not launched then
+			reject(player, action, reason or "The debug round could not launch")
+			return
+		end
+		sendEvent(player, "DebugTelemetryChanged", {
+			enabled = game:GetAttribute("BashFakeTelemetry") == true,
+		})
+		accept(player, action, `{gameId} / seed {math.floor(seed)}`)
+		return
+	elseif action == "UseCard" then
 		local cardId = if payload then payload.cardId else nil
 		if type(cardId) ~= "string" then
 			reject(player, action, "Choose a cue card")
@@ -703,19 +854,42 @@ local function handleCommand(player: Player, command: any)
 			workspace:GetServerTimeNow(),
 			lastSignificantMomentAt
 		)
-		strategy = play.state
 		if not play.accepted then
 			reject(player, action, play.reason or "That cue is unavailable")
 			return
 		end
-		broadcast("DirectorCardPlayed", play.effect)
+		local effect = play.effect
+		if type(effect) ~= "table" then
+			reject(player, action, "That cue has no gameplay effect")
+			return
+		end
+		local applied, applyReason =
+			DirectorEffectDispatch.apply(session.phase, activeMinigame, effect)
+		if not applied then
+			reject(player, action, applyReason or "That cue could not be applied")
+			return
+		end
+		strategy = play.state
+		if session.phase == "Minigame" then
+			sendEvent(player, "DirectorCardPlayed", effect)
+		else
+			broadcast("DirectorCardPlayed", effect)
+		end
 		publishState("DirectorCardPlayed")
 		accept(player, action, cardId)
 		return
 	elseif action == "Predict" then
 		local prediction = if payload then payload.moment else nil
-		if type(prediction) ~= "string" then
+		if type(prediction) ~= "string" or not DirectorStrategy.isPrediction(prediction) then
 			reject(player, action, "Choose a prediction")
+			return
+		end
+		if session.phase ~= "Minigame" then
+			reject(player, action, "Predictions open during an active act")
+			return
+		end
+		if strategy.prediction ~= nil then
+			reject(player, action, "Your prediction is already locked for this act")
 			return
 		end
 		strategy = DirectorStrategy.predict(strategy, prediction)
@@ -946,20 +1120,23 @@ local function handleRoundIngress(player: Player, envelope: any)
 
 	local roundConfig = activeRoundConfig
 	if state.phase ~= "Minigame" or not activeMinigame or not roundConfig then
+		recordIngressRejection(envelope.kind, "no active round")
 		return
 	end
-	local bounded = ContractValidation.isBoundedPayload(envelope)
+	local bounded, boundedReason = ContractValidation.isBoundedPayload(envelope)
 	if not bounded then
+		recordIngressRejection(envelope.kind, boundedReason)
 		return
 	end
 
 	if envelope.kind == "Input" then
 		if not consumeRateLimit(player, "RoundInput") then
+			recordIngressRejection("Input", "rate limit")
 			return
 		end
 		local input = envelope.payload
 		local previousSequence = lastInputSequence[player] or 0
-		local valid = ContractValidation.validateRoundInput(
+		local valid, reason = ContractValidation.validateRoundInput(
 			input,
 			roundConfig.roundId,
 			previousSequence,
@@ -967,37 +1144,48 @@ local function handleRoundIngress(player: Player, envelope: any)
 			roundConfig.gameId
 		)
 		if not valid then
+			recordIngressRejection("Input", reason)
 			return
 		end
 		lastInputSequence[player] = input.sequence
+		recordIngressAccepted()
 		local handler = activeMinigame.handleInput
 		if handler then
 			handler(activeMinigame, player, input :: Types.RoundInput)
 		end
 	elseif envelope.kind == "Telemetry" then
 		if not consumeRateLimit(player, "Telemetry") then
+			recordIngressRejection("Telemetry", "rate limit")
 			return
 		end
 		local sample = envelope.payload
-		local valid = ContractValidation.validateTelemetry(sample, roundConfig.roundId)
+		local valid, reason = ContractValidation.validateTelemetry(sample, roundConfig.roundId)
 		if not valid then
+			recordIngressRejection("Telemetry", reason)
 			return
 		end
+		recordIngressAccepted()
 		local director = RoleService.getDirector()
 		if director then
 			sendEvent(director, "TelemetrySample", sample)
 		end
 	elseif envelope.kind == "Ready" then
 		if not consumeRateLimit(player, "RoundReady") then
+			recordIngressRejection("Ready", "rate limit")
 			return
 		end
 		local payload = envelope.payload
 		if type(payload) == "table" and payload.roundId == roundConfig.roundId then
+			recordIngressAccepted()
 			sendEvent(player, "RoundSnapshot", {
 				roundConfig = roundConfig,
 				lastAcceptedSequence = lastInputSequence[player] or 0,
 			})
+		else
+			recordIngressRejection("Ready", "stale round")
 		end
+	else
+		recordIngressRejection(envelope.kind, "unknown ingress kind")
 	end
 end
 
@@ -1104,15 +1292,17 @@ function ShowDirectorService.start()
 						now,
 						lastSignificantMomentAt
 					)
-					strategy = play.state
 					if play.accepted then
-						lastShowrunnerAt = now
-						broadcast("DirectorCardPlayed", {
-							cardId = cue,
-							effect = play.effect,
-							showrunner = true,
-						})
-						publishState("ShowrunnerCue")
+						local effect = play.effect
+						if type(effect) == "table" then
+							local applied =
+								DirectorEffectDispatch.apply(session.phase, activeMinigame, effect)
+							if applied then
+								strategy = play.state
+								lastShowrunnerAt = now
+								publishState("ShowrunnerCue")
+							end
+						end
 					end
 				end
 			end

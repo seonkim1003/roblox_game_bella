@@ -1,12 +1,15 @@
-# Bella's Birthday Bash — Build Plan
+# Bella's Birthday Bash — Original Build Brief
+
+> Historical planning reference. The two implementation lanes are now integrated; current status and release gates live in [INTEGRATED_RELEASE_PLAN.md](INTEGRATED_RELEASE_PLAN.md).
 
 A private **2-player live show** built in Roblox. **Bella** is the star who plays three
 satisfying minigames; **you (the Director)** secretly run the show from a control panel —
 pacing it, summoning her dogs, sending live messages and surprises, and closing on a cozy
 finale where a brooding **Robert-as-Batman** makes his grand entrance.
 
-This document is the single source of truth for **two coding agents working in parallel on the
-same machine**. Read the whole thing before writing code. The most important sections are
+This document preserves the original two-agent build brief. For current implementation status,
+ownership, and shared release gates, use `INTEGRATED_RELEASE_PLAN.md`. The historical protocol's
+most important sections are
 [§7 Two-Agent Protocol](#7-two-agent-protocol) and [§8 Ownership Map](#8-ownership-map) — they
 exist so the two agents never edit the same file.
 

@@ -145,6 +145,34 @@ do
 	check("chain: accumulated some score before toppling", total > 0)
 end
 
+-- 11. Nudge moves the drop toward support and reports alignment.
+do
+	local nudged, alignment = Scoring.nudgeToward(3, 0, 1.25)
+	check("nudge: moves closer", math.abs(nudged) < 3)
+	check("nudge: positive alignment", alignment > 0.5)
+	local centered, perfectAlign = Scoring.nudgeToward(0, 0, 1)
+	check("nudge: already centered stays", approx(centered, 0))
+	check("nudge: centered alignment is 1", approx(perfectAlign, 1))
+end
+
+-- 12. Rescue saves near-misses and soft-recenters shaky places.
+do
+	local miss = Scoring.resolveDrop(0, 8, 10, 8, 0)
+	check("rescue precondition: miss", not miss.placed)
+	local rescued = Scoring.rescueDrop(0, 8, 9.2, 8, 0)
+	check("rescue: near miss places", rescued.placed)
+	check("rescue: not perfect", not rescued.perfect)
+	local shaky = Scoring.rescueDrop(0, 8, 3, 8, 0)
+	check("rescue: shaky still places", shaky.placed)
+end
+
+-- 13. Bank / topper helpers stay helpful.
+do
+	check("bank: positive bonus", Scoring.bankPoints(5, 20) > 0)
+	check("topper: risky doubles", approx(Scoring.topperMultiplier(true), 2))
+	check("topper: safe is 1.5", approx(Scoring.topperMultiplier(false), 1.5))
+end
+
 if failed > 0 then
 	error(`CheeseTower.spec: {failed} check(s) failed ({passed} passed)`)
 end

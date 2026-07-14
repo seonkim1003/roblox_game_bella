@@ -14,6 +14,7 @@ local Types = require(Shared.Types)
 local Feedback = require(script.Parent.Parent.juice.Feedback)
 local SoundKit = require(script.Parent.Parent.juice.SoundKit)
 local InputRouter = require(script.Parent.InputRouter)
+local RoundIngress = require(script.Parent.RoundIngress)
 local StarHud = require(script.Parent.StarHud)
 
 export type FinalePresenterApi = {
@@ -27,6 +28,7 @@ local StarController = {}
 local minigames: { [string]: Types.MinigameClient } = {}
 local activeClient: Types.MinigameClient? = nil
 local activeRunId: number? = nil
+local activeIngress: RoundIngress.Session? = nil
 local eventListeners: { (string, { [string]: any }?) -> () } = {}
 local finalePresenter: FinalePresenterApi? = nil
 local finaleActive = false
@@ -38,11 +40,60 @@ local function clearEventListeners()
 	table.clear(eventListeners)
 end
 
-local function buildContext(minigameId: string, runId: number?): Types.ClientContext
+local function buildContext(
+	minigameId: string,
+	runId: number?,
+	roundConfig: Types.RoundConfig?
+): Types.ClientContext
 	clearEventListeners()
+	activeIngress = if roundConfig then RoundIngress.create(roundConfig) else nil
+	if activeIngress then
+		activeIngress.ready()
+	end
+	local ingress = activeIngress
 	return {
+		roundConfig = roundConfig,
+		sendInput = if ingress
+			then function(roundInput: Types.RoundInput)
+				-- Star owns sequence + clock; callers only supply action/value.
+				ingress.sendInput(roundInput.action :: Types.RoundAction, roundInput.value)
+			end
+			else nil,
+		publishTelemetry = if ingress
+			then function(sample: Types.TelemetrySample)
+				ingress.publishTelemetry(
+					sample.metric :: Types.TelemetryMetric,
+					sample.value,
+					sample.tag
+				)
+			end
+			else nil,
 		reportScore = function(score: number, data: { [string]: any }?)
-			hud:setScore(score, if data and type(data.detail) == "string" then data.detail else nil)
+			local detail = if data and type(data.detail) == "string" then data.detail else nil
+			local mood: StarHud.ScoreMood = "neutral"
+			if data then
+				local detailMiss = type(detail) == "string"
+					and (detail == "miss" or string.find(detail, "combo broken", 1, true) ~= nil)
+				local detailGood = type(detail) == "string"
+					and (
+						string.find(detail, "perfect", 1, true) ~= nil
+						or string.find(detail, "topper", 1, true) ~= nil
+						or string.find(detail, "rescued", 1, true) ~= nil
+						or string.find(detail, "banked", 1, true) ~= nil
+					)
+				if data.toppled == true or data.comboBroken == true or detailMiss then
+					mood = "miss"
+				elseif
+					data.perfect == true
+					or data.banked == true
+					or (type(data.combo) == "number" and data.combo > 1)
+					or detailGood
+				then
+					mood = "good"
+				end
+			end
+			hud:setScore(score, detail, mood)
+			-- Legacy ScoreUpdate path for Director HUD while A1 ingress also carries telemetry.
 			Net.get(Net.MinigameScore):FireServer({
 				id = minigameId,
 				runId = runId,
@@ -153,8 +204,10 @@ local function stopActive()
 		activeClient = nil
 	end
 	activeRunId = nil
+	activeIngress = nil
 	clearEventListeners()
 	input:setEnabled(false)
+	hud:clearSoftActions()
 	hud:setHint("")
 	hud:setGameplayVisible(false)
 end
@@ -182,7 +235,21 @@ local function startFinalePresenter(payload: { [string]: any }?)
 	end
 end
 
-local function startMinigame(id: string, runId: number?): boolean
+local function readRoundConfig(payload: { [string]: any }?): Types.RoundConfig?
+	if not payload then
+		return nil
+	end
+	local config = payload.roundConfig
+	if type(config) ~= "table" then
+		return nil
+	end
+	if type(config.roundId) ~= "string" or type(config.gameId) ~= "string" then
+		return nil
+	end
+	return config :: Types.RoundConfig
+end
+
+local function startMinigame(id: string, runId: number?, roundConfig: Types.RoundConfig?): boolean
 	if activeClient and activeClient.id == id and activeRunId == runId then
 		return false
 	end
@@ -204,7 +271,7 @@ local function startMinigame(id: string, runId: number?): boolean
 	else
 		hud:setHint("Tap / click / Space to drop")
 	end
-	client:start(buildContext(id, activeRunId))
+	client:start(buildContext(id, activeRunId, roundConfig))
 	return true
 end
 
@@ -219,7 +286,11 @@ local function handleShowEvent(event: string, payload: { [string]: any }?)
 		local id = payload and payload.id
 		local runId = payload and payload.runId
 		if type(id) == "string" then
-			startMinigame(id, if type(runId) == "number" then runId else nil)
+			startMinigame(
+				id,
+				if type(runId) == "number" then runId else nil,
+				readRoundConfig(payload)
+			)
 		end
 		return
 	end
@@ -230,7 +301,7 @@ local function handleShowEvent(event: string, payload: { [string]: any }?)
 		if phase == "Minigame" and type(id) == "string" and type(runId) == "number" then
 			-- Recover when the Star's role boot happened after the original start
 			-- events. The server snapshot is authoritative for the active run.
-			if startMinigame(id, runId) then
+			if startMinigame(id, runId, readRoundConfig(payload)) then
 				local difficulty = payload and payload.difficulty
 				fanOutToActive(id .. "Begin", {
 					difficulty = if type(difficulty) == "number" then difficulty else 0.5,
@@ -274,7 +345,7 @@ local function handleShowEvent(event: string, payload: { [string]: any }?)
 			presentSurprise(kind)
 		end
 	elseif event == "DirectorSignal" then
-		-- M1 compatibility path while Agent B finishes SurpriseTriggered broadcasts.
+		-- Legacy compatibility path for older DirectorSignal surprise broadcasts.
 		local action = payload and payload.action
 		local inner = payload and payload.payload
 		if action == "Surprise" and type(inner) == "table" and type(inner.kind) == "string" then
@@ -288,6 +359,18 @@ local function handleShowEvent(event: string, payload: { [string]: any }?)
 			pcall(function()
 				finalePresenter:beat(beat, payload)
 			end)
+		end
+	elseif event == "RoundSnapshot" then
+		local lastAccepted = payload and payload.lastAcceptedSequence
+		local snapshotConfig = payload and payload.roundConfig
+		if
+			activeIngress
+			and type(lastAccepted) == "number"
+			and type(snapshotConfig) == "table"
+			and type(snapshotConfig.roundId) == "string"
+			and snapshotConfig.roundId == activeIngress.roundConfig.roundId
+		then
+			activeIngress.syncSequence(lastAccepted)
 		end
 	end
 
@@ -320,6 +403,48 @@ end
 
 function StarController.getHud()
 	return hud
+end
+
+function StarController.setSoftActions(actions: { StarHud.SoftAction })
+	hud:setSoftActions(actions, function(actionId: string)
+		if
+			actionId == "Drop"
+			or actionId == "Left"
+			or actionId == "Right"
+			or actionId == "Primary"
+			or actionId == "Slice"
+			or actionId == "Secondary"
+			or actionId == "Tertiary"
+			or actionId == "Switch"
+		then
+			input:emit(actionId)
+		end
+	end)
+end
+
+function StarController.clearSoftActions()
+	hud:clearSoftActions()
+end
+
+-- Convenience A1 helpers so minigames never invent sequence numbers.
+function StarController.sendRoundAction(action: Types.RoundAction, value: number?)
+	if activeIngress then
+		activeIngress.sendInput(action, value)
+	end
+end
+
+function StarController.publishRoundTelemetry(
+	metric: Types.TelemetryMetric,
+	value: number,
+	tag: string?
+)
+	if activeIngress then
+		activeIngress.publishTelemetry(metric, value, tag)
+	end
+end
+
+function StarController.getRoundConfig(): Types.RoundConfig?
+	return if activeIngress then activeIngress.roundConfig else nil
 end
 
 return StarController
