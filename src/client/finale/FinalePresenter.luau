@@ -1,7 +1,7 @@
 --!strict
 
--- Star-only finale presentation. StarController loads and starts this module;
--- it listens to the existing show event boundary without adding a new remote.
+-- Star-only finale presentation: hard-cut camera shots + message cards.
+-- Character motion/animation are server-authored; this module only frames them.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -15,6 +15,7 @@ local VisualConfig = require(Shared.VisualConfig)
 local Feedback = require(script.Parent.Parent.juice.Feedback)
 local SoundKit = require(script.Parent.Parent.juice.SoundKit)
 local AccessibilitySettings = require(script.Parent.AccessibilitySettings)
+local CutsceneCamera = require(script.Parent.CutsceneCamera)
 
 type Payload = { [string]: any }
 
@@ -29,9 +30,7 @@ local titleLabel: TextLabel? = nil
 local messageLabel: TextLabel? = nil
 local shade: Frame? = nil
 local messageCard: Frame? = nil
-local previousCameraType: Enum.CameraType? = nil
-local previousCameraSubject: Instance? = nil
-local previousCameraCFrame: CFrame? = nil
+local finaleFolder: Folder? = nil
 
 local function tween(object: Instance, duration: number, properties: { [string]: any })
 	if AccessibilitySettings.get().reducedMotion then
@@ -175,31 +174,30 @@ local function mount()
 	messageLabel = message
 end
 
-local function focusCamera(token: number)
-	local camera = Workspace.CurrentCamera
-	if not camera then
+local function waitForFinaleFolder(token: number): Folder?
+	local folder = Workspace:WaitForChild("BirthdayFinale", 5)
+	if token ~= generation or not folder or not folder:IsA("Folder") then
+		return nil
+	end
+	finaleFolder = folder
+	return folder
+end
+
+local function cut(shotFocus: string, offset: Vector3, lookHeight: number?, fade: boolean?)
+	if AccessibilitySettings.get().reducedMotion then
+		-- Still snap for framing; skip the fade wipe when motion is reduced.
+		fade = false
+	end
+	local folder = finaleFolder or Workspace:FindFirstChild("BirthdayFinale")
+	if not folder or not folder:IsA("Folder") then
 		return
 	end
-	previousCameraType = camera.CameraType
-	previousCameraSubject = camera.CameraSubject
-	previousCameraCFrame = camera.CFrame
-	camera.CameraType = Enum.CameraType.Scriptable
-
-	task.spawn(function()
-		local finaleFolder = Workspace:WaitForChild("BirthdayFinale", 5)
-		if token ~= generation or not finaleFolder then
-			return
-		end
-		local focus = finaleFolder:FindFirstChild("FinaleFocus")
-		if not focus or not focus:IsA("BasePart") then
-			return
-		end
-		local target = CFrame.lookAt(
-			focus.Position + Vector3.new(0, 4.5, 15),
-			focus.Position + Vector3.new(0, 2, 0)
-		)
-		tween(camera, 2.8, { CFrame = target })
-	end)
+	CutsceneCamera.cutTo(folder, {
+		focusName = shotFocus,
+		offset = offset,
+		lookHeight = lookHeight,
+		fade = fade == true,
+	})
 end
 
 local function validLines(raw: any): { string }
@@ -247,25 +245,34 @@ local function begin(lines: { string }, summary: Payload?)
 	title.TextTransparency = 1
 	message.TextTransparency = 1
 	card.BackgroundTransparency = 1
-	tween(backdrop, 2.2, { BackgroundTransparency = 0.42 })
-	tween(title, 1.5, { TextTransparency = 0.15 })
-	tween(card, 1.8, { BackgroundTransparency = 0.2 })
+	tween(backdrop, 1.1, { BackgroundTransparency = 0.55 })
+	tween(title, 0.7, { TextTransparency = 0.15 })
+	tween(card, 0.9, { BackgroundTransparency = 0.2 })
 	playSound("softChime", "Soft chime")
-	focusCamera(token)
+
+	CutsceneCamera.begin()
+	task.spawn(function()
+		local folder = waitForFinaleFolder(token)
+		if not folder or token ~= generation then
+			return
+		end
+		-- Establishing hard cut — no multi-second camera glide.
+		cut("ShotWide", Vector3.new(0, 5.2, 16), 2.2, false)
+	end)
 
 	task.spawn(function()
-		task.wait(2.4)
+		task.wait(2.2)
 		for _, line in lines do
 			if token ~= generation then
 				return
 			end
 			message.Text = line
 			message.TextTransparency = 1
-			tween(message, 0.65, { TextTransparency = 0 })
+			tween(message, 0.45, { TextTransparency = 0 })
 			playSound("softChime", "Message chime")
-			task.wait(2.5)
-			tween(message, 0.5, { TextTransparency = 1 })
-			task.wait(0.55)
+			task.wait(2.4)
+			tween(message, 0.35, { TextTransparency = 1 })
+			task.wait(0.4)
 		end
 		if token ~= generation then
 			return
@@ -281,7 +288,7 @@ local function begin(lines: { string }, summary: Payload?)
 		end
 		message.Text = `Happy Birthday, {Config.starName}.`
 		message.TextTransparency = 1
-		tween(message, 1.1, { TextTransparency = 0 })
+		tween(message, 0.8, { TextTransparency = 0 })
 		performanceConfetti(summary)
 		playSound("cheer", "Birthday cheer")
 	end)
@@ -296,9 +303,22 @@ function FinalePresenter.beat(_self: any, beat: string, _payload: Payload?)
 	if not active then
 		return
 	end
-	if beat == "BroodingGuest" then
+	if beat == "Establishing" then
+		cut("ShotWide", Vector3.new(0, 5.2, 16), 2.2, false)
+	elseif beat == "LightsDimmed" then
+		cut("ShotWide", Vector3.new(3.5, 4.2, 13), 2, true)
+		playSound("softChime", "Lights dim chime")
+	elseif beat == "DogsResting" then
+		cut("ShotDogs", Vector3.new(-2.5, 2.4, 7.5), 0.8, true)
+	elseif beat == "Message" then
+		cut("ShotWide", Vector3.new(-1.5, 4.8, 14), 2.2, false)
+	elseif beat == "BroodingGuest" then
+		cut("ShotGuest", Vector3.new(-5.5, 3.2, 7), 1.4, true)
 		playSound("softChime", "Guest reveal chime")
+	elseif beat == "GuestWave" then
+		cut("ShotGuest", Vector3.new(-3.2, 2.6, 5.5), 1.5, true)
 	elseif beat == "HappyBirthday" then
+		cut("ShotBirthday", Vector3.new(0, 4.8, 13), 2.4, true)
 		gentleConfetti()
 		playSound("cheer", "Birthday cheer")
 	end
@@ -307,20 +327,15 @@ end
 function FinalePresenter.stop(_self: any)
 	generation += 1
 	active = false
-	local camera = Workspace.CurrentCamera
-	if camera then
-		camera.CameraType = previousCameraType or Enum.CameraType.Custom
-		if previousCameraSubject then
-			camera.CameraSubject = previousCameraSubject
-		end
-		if previousCameraCFrame then
-			camera.CFrame = previousCameraCFrame
-		end
-	end
+	finaleFolder = nil
+	CutsceneCamera.stop()
 	if gui then
 		gui:Destroy()
 		gui = nil
 		messageCard = nil
+		shade = nil
+		titleLabel = nil
+		messageLabel = nil
 	end
 end
 

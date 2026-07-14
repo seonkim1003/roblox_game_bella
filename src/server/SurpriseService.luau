@@ -14,6 +14,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
 local VisualConfig = require(Shared.VisualConfig)
 local DogBuilder = require(script.Parent.world.DogBuilder)
+local DogPuppet = require(script.Parent.world.DogPuppet)
 local VisualKit = require(script.Parent.world.VisualKit)
 
 type Payload = { [string]: any }
@@ -276,35 +277,65 @@ local function asmrBurstSurprise(at: CFrame)
 	end
 end
 
-local function tweenRoot(root: BasePart, target: CFrame, duration: number): Tween
+-- Linear root motion + Motor6D limb clips. Quad eased rigid slides looked like gliding blocks.
+local function moveRootLinear(root: BasePart, target: CFrame, duration: number): Tween
 	local tween = TweenService:Create(
 		root,
-		TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		TweenInfo.new(math.max(duration, 0.05), Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
 		{ CFrame = target }
 	)
 	tween:Play()
 	return tween
 end
 
-local function animateTrick(root: BasePart, target: CFrame, trick: string, side: number)
+local function animateTrick(dog: Model, target: CFrame, trick: string, side: number)
+	local root = dog.PrimaryPart
+	if not root then
+		return
+	end
 	if trick == "TrotIn" then
-		tweenRoot(root, target, 1.8)
-	elseif trick == "Spin" then
-		local arrival = tweenRoot(root, target, 0.65)
+		DogPuppet.play(dog, "Walk")
+		local arrival = moveRootLinear(root, target, 1.6)
 		arrival.Completed:Once(function()
+			if dog.Parent then
+				DogPuppet.play(dog, "Idle")
+			end
+		end)
+	elseif trick == "Spin" then
+		DogPuppet.play(dog, "Walk")
+		local arrival = moveRootLinear(root, target, 0.55)
+		arrival.Completed:Once(function()
+			if not dog.Parent then
+				return
+			end
+			DogPuppet.play(dog, "Spin")
 			task.spawn(function()
 				for quarter = 1, 4 do
 					if not root.Parent then
 						return
 					end
-					local spin =
-						tweenRoot(root, target * CFrame.Angles(0, math.rad(90 * quarter), 0), 0.22)
+					local spin = moveRootLinear(
+						root,
+						target * CFrame.Angles(0, math.rad(90 * quarter), 0),
+						0.18
+					)
 					spin.Completed:Wait()
+				end
+				if dog.Parent then
+					DogPuppet.play(dog, "Idle")
 				end
 			end)
 		end)
 	else
-		tweenRoot(root, target * CFrame.new(-0.35 * side, -0.18, 0.35), 1.15)
+		-- Cuddle: trot in close, then sit with limb pose.
+		local snuggle = target * CFrame.new(-0.35 * side, -0.18, 0.35)
+		DogPuppet.play(dog, "Walk")
+		local arrival = moveRootLinear(root, snuggle, 1.05)
+		arrival.Completed:Once(function()
+			if dog.Parent then
+				DogPuppet.play(dog, "Sit")
+			end
+		end)
 	end
 end
 
@@ -382,9 +413,7 @@ function SurpriseService.summonDogs(star: Player?, trick: string): (boolean, str
 			}
 		)
 		table.insert(names, dogConfig.name)
-		if dog.PrimaryPart then
-			animateTrick(dog.PrimaryPart, target, trick, side)
-		end
+		animateTrick(dog, target, trick, side)
 	end
 	Debris:AddItem(folder, DOG_LIFETIME)
 	task.delay(DOG_LIFETIME, function()

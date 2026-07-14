@@ -333,6 +333,10 @@ local function addAnchors(parent: Instance)
 		HubCenter = Vector3.new(0, 0.5, 0),
 		ShowStage = Vector3.new(0, 1.3, -18),
 		FinaleCenter = Vector3.new(0, 1, -18),
+		Cam_CheeseTower = Vector3.new(-10, 2, -8),
+		Cam_DogDash = Vector3.new(10, 2, -6),
+		Cam_SatisfyStation = Vector3.new(0, 2, 8),
+		Cam_Interlude = Vector3.new(0, 2, -4),
 	}
 	for name, position in positions do
 		local anchor = VisualKit.part(

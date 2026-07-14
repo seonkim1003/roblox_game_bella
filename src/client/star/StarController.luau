@@ -23,6 +23,12 @@ export type FinalePresenterApi = {
 	stop: (self: FinalePresenterApi) -> (),
 }
 
+export type CutsceneDirectorApi = {
+	start: (self: CutsceneDirectorApi) -> (),
+	handle: (self: CutsceneDirectorApi, event: string, payload: { [string]: any }?) -> (),
+	stop: (self: CutsceneDirectorApi) -> (),
+}
+
 local StarController = {}
 
 local minigames: { [string]: Types.MinigameClient } = {}
@@ -31,10 +37,15 @@ local activeRunId: number? = nil
 local activeIngress: RoundIngress.Session? = nil
 local eventListeners: { (string, { [string]: any }?) -> () } = {}
 local finalePresenter: FinalePresenterApi? = nil
+local cutsceneDirector: CutsceneDirectorApi? = nil
 local finaleActive = false
 
 local input = InputRouter.new()
 local hud = StarHud.new()
+
+local function isFinalePhase(phase: string?): boolean
+	return phase == "Finale" or phase == "HeadlinerFinale"
+end
 
 local function clearEventListeners()
 	table.clear(eventListeners)
@@ -165,8 +176,7 @@ local function loadMinigames()
 	end
 end
 
--- Agent B owns client/finale/FinalePresenter. We load it if present and forward
--- FinaleStarted / FinaleBeat without implementing the scene ourselves.
+-- Agent B owns client/finale/*. We load presenters if present and forward show events.
 local function loadFinalePresenter()
 	local folder = script.Parent.Parent:FindFirstChild("finale")
 	if not folder then
@@ -183,6 +193,25 @@ local function loadFinalePresenter()
 		finalePresenter = result :: FinalePresenterApi
 	else
 		warn("[Bash][Star] FinalePresenter present but failed to load")
+	end
+end
+
+local function loadCutsceneDirector()
+	local folder = script.Parent.Parent:FindFirstChild("finale")
+	if not folder then
+		return
+	end
+	local moduleScript = folder:FindFirstChild("CutsceneDirector")
+	if not (moduleScript and moduleScript:IsA("ModuleScript")) then
+		return
+	end
+	local ok, result = pcall(function()
+		return (require :: any)(moduleScript)
+	end)
+	if ok and type(result) == "table" and type(result.handle) == "function" then
+		cutsceneDirector = result :: CutsceneDirectorApi
+	else
+		warn("[Bash][Star] CutsceneDirector present but failed to load")
 	end
 end
 
@@ -327,6 +356,12 @@ local function fanOutToActive(event: string, payload: { [string]: any }?)
 end
 
 local function handleShowEvent(event: string, payload: { [string]: any }?)
+	if cutsceneDirector then
+		pcall(function()
+			cutsceneDirector:handle(event, payload)
+		end)
+	end
+
 	if event == "MinigameStarted" then
 		local id = payload and payload.id
 		local runId = payload and payload.runId
@@ -355,9 +390,9 @@ local function handleShowEvent(event: string, payload: { [string]: any }?)
 			end
 		elseif type(phase) == "string" and phase ~= "Minigame" then
 			stopActive()
-			if phase == "Finale" then
-				startFinalePresenter(payload)
-			else
+			-- Premiere uses HeadlinerFinale; legacy path used Finale.
+			-- FinaleStarted owns start — do not tear down on those phases.
+			if not isFinalePhase(phase) then
 				stopFinalePresenter()
 			end
 		end
@@ -367,15 +402,15 @@ local function handleShowEvent(event: string, payload: { [string]: any }?)
 	if event == "MinigameComplete" or event == "PhaseChanged" then
 		local phase = payload and payload.phase
 		local wasPlaying = activeClient ~= nil
-		if event == "MinigameComplete" or phase == "Hub" or phase == "Finale" then
+		if event == "MinigameComplete" or phase == "Hub" or isFinalePhase(phase) then
 			stopActive()
 		end
 		-- Celebrate the run just ended (unless the finale is taking over).
-		if event == "MinigameComplete" and wasPlaying and phase ~= "Finale" then
+		if event == "MinigameComplete" and wasPlaying and not isFinalePhase(phase) then
 			showRunSummary()
 		end
-		-- FinaleStarted owns presentation; leaving Finale tears the presenter down.
-		if type(phase) == "string" and phase ~= "Finale" then
+		-- FinaleStarted owns presentation; leaving finale tears the presenter down.
+		if type(phase) == "string" and not isFinalePhase(phase) then
 			stopFinalePresenter()
 		end
 	end
@@ -433,10 +468,16 @@ function StarController.start()
 
 	loadMinigames()
 	loadFinalePresenter()
+	loadCutsceneDirector()
 	hud:mount()
 	hud:setGameplayVisible(false)
 	input:start()
 	input:setEnabled(false)
+	if cutsceneDirector then
+		pcall(function()
+			cutsceneDirector:start()
+		end)
+	end
 
 	-- Expose input to minigames without freezing Types: they require InputRouter via
 	-- StarController.getInput() so they share one router instance.

@@ -1,6 +1,7 @@
 --!strict
 
 -- Server-authoritative cozy finale set and timing. The client owns camera/text only.
+-- Characters use real R15 AnimationTracks / Motor6D dog puppets — no rigid glides.
 
 local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
@@ -11,7 +12,9 @@ local Workspace = game:GetService("Workspace")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
 local VisualConfig = require(Shared.VisualConfig)
+local CharacterRig = require(script.Parent.world.CharacterRig)
 local DogBuilder = require(script.Parent.world.DogBuilder)
+local DogPuppet = require(script.Parent.world.DogPuppet)
 local VisualKit = require(script.Parent.world.VisualKit)
 
 type Payload = { [string]: any }
@@ -33,143 +36,35 @@ local finaleWorld: Folder? = nil
 local lightingSnapshot: LightingSnapshot? = nil
 local runToken = 0
 
-local function broadcastBeat(token: number, delaySeconds: number, beat: string)
+local function broadcastBeat(token: number, delaySeconds: number, beat: string, extra: Payload?)
 	task.delay(delaySeconds, function()
 		if token ~= runToken or not finaleWorld or not finaleWorld.Parent then
 			return
 		end
 		if broadcast then
-			broadcast("FinaleBeat", { beat = beat })
+			local payload: Payload = { beat = beat }
+			if extra then
+				for key, value in extra do
+					payload[key] = value
+				end
+			end
+			broadcast("FinaleBeat", payload)
 		end
 	end)
 end
 
-local function weldedPiece(
-	model: Model,
-	root: BasePart,
-	name: string,
-	size: Vector3,
-	localCFrame: CFrame,
-	color: Color3,
-	material: Enum.Material,
-	shape: Enum.PartType?
-): Part
-	local part = VisualKit.part(
-		model,
+local function addShotMarker(parent: Instance, name: string, cf: CFrame)
+	local marker = VisualKit.part(
+		parent,
 		name,
-		size,
-		root.CFrame * localCFrame,
-		color,
-		material,
-		{ shape = shape }
-	)
-	part.Anchored = false
-	part.Massless = true
-	local weld = Instance.new("WeldConstraint")
-	weld.Part0 = root
-	weld.Part1 = part
-	weld.Parent = part
-	return part
-end
-
-local function createMaskedGuest(parent: Instance, center: CFrame): (BasePart, Model)
-	local model = Instance.new("Model")
-	model.Name = "OriginalMaskedGuest"
-	model.Parent = parent
-	local root = VisualKit.part(
-		model,
-		"GuestRoot",
-		Vector3.new(0.4, 0.4, 0.4),
-		center * CFrame.new(8.2, 2.65, -2.5),
-		P.night,
+		Vector3.one,
+		cf,
+		Color3.new(1, 1, 1),
 		Enum.Material.SmoothPlastic,
 		{ transparency = 1 }
 	)
-	model.PrimaryPart = root
-	weldedPiece(
-		model,
-		root,
-		"Coat",
-		Vector3.new(2.3, 4.3, 1.3),
-		CFrame.new(),
-		Color3.fromRGB(35, 37, 48),
-		Enum.Material.Fabric,
-		Enum.PartType.Block
-	)
-	weldedPiece(
-		model,
-		root,
-		"Cape",
-		Vector3.new(4.5, 5.15, 0.28),
-		CFrame.new(0, -0.25, 0.72),
-		Color3.fromRGB(20, 21, 29),
-		Enum.Material.Fabric,
-		Enum.PartType.Block
-	)
-	weldedPiece(
-		model,
-		root,
-		"ShoulderLeft",
-		Vector3.new(1.3, 0.7, 1.45),
-		CFrame.new(-1.25, 1.45, 0),
-		Color3.fromRGB(29, 31, 41),
-		Enum.Material.SmoothPlastic,
-		Enum.PartType.Ball
-	)
-	weldedPiece(
-		model,
-		root,
-		"ShoulderRight",
-		Vector3.new(1.3, 0.7, 1.45),
-		CFrame.new(1.25, 1.45, 0),
-		Color3.fromRGB(29, 31, 41),
-		Enum.Material.SmoothPlastic,
-		Enum.PartType.Ball
-	)
-	local head = CFrame.new(0, 2.9, 0)
-	weldedPiece(
-		model,
-		root,
-		"Mask",
-		Vector3.new(1.7, 1.85, 1.5),
-		head,
-		Color3.fromRGB(42, 44, 56),
-		Enum.Material.SmoothPlastic,
-		Enum.PartType.Ball
-	)
-	for side = -1, 1, 2 do
-		weldedPiece(
-			model,
-			root,
-			if side == -1 then "LeftMaskPoint" else "RightMaskPoint",
-			Vector3.new(0.38, 1.15, 0.48),
-			head * CFrame.new(side * 0.5, 1.1, 0) * CFrame.Angles(0, 0, math.rad(side * 7)),
-			Color3.fromRGB(34, 36, 46),
-			Enum.Material.SmoothPlastic,
-			Enum.PartType.Block
-		)
-		weldedPiece(
-			model,
-			root,
-			if side == -1 then "LeftEye" else "RightEye",
-			Vector3.new(0.34, 0.13, 0.08),
-			head * CFrame.new(side * 0.37, 0.12, -0.73),
-			Color3.fromRGB(188, 217, 230),
-			Enum.Material.Neon,
-			Enum.PartType.Block
-		)
-	end
-	weldedPiece(
-		model,
-		root,
-		"Brooch",
-		Vector3.new(0.42, 0.42, 0.16),
-		CFrame.new(0, 1.25, -0.7),
-		P.butter,
-		Enum.Material.Metal,
-		Enum.PartType.Ball
-	)
-	return root, model
+	marker.CanQuery = false
+	return marker
 end
 
 local function applyFinaleLighting()
@@ -457,47 +352,82 @@ function FinaleService.begin(
 	)
 	VisualKit.pointLight(accentOrb, accent, 0.8, 10)
 	local dogPose = if summary and summary.dogPose == "VictoryTandem" then "Standing" else "Curled"
-	DogBuilder.create(
+	local dogClip = if dogPose == "Standing" then "Idle" else "Curled"
+
+	local gigi = DogBuilder.create(
 		folder,
 		Config.dogs[1].name,
 		Config.dogs[1].color,
 		center * CFrame.new(-1.2, 0.75, 0.3),
 		{ pose = dogPose :: any, accessoryColor = P.blush, showName = false }
 	)
-	DogBuilder.create(
+	local rambo = DogBuilder.create(
 		folder,
 		Config.dogs[2].name,
 		Config.dogs[2].color,
 		center * CFrame.new(1.4, 0.75, 0.4) * CFrame.Angles(0, math.rad(20), 0),
 		{ pose = dogPose :: any, accessoryColor = P.sky, showName = false }
 	)
+	DogPuppet.play(gigi, dogClip :: any)
+	DogPuppet.play(rambo, dogClip :: any)
 
-	local guestRoot = createMaskedGuest(folder, center)
-	TweenService:Create(
-		guestRoot,
-		TweenInfo.new(4.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, 4.5),
-		{ CFrame = center * CFrame.new(6.5, 2.65, 1) }
-	):Play()
+	local guestStart = center * CFrame.new(9.5, 3, -4.5) * CFrame.Angles(0, math.rad(-35), 0)
+	local guestEnd = center * CFrame.new(5.8, 3, 0.8) * CFrame.Angles(0, math.rad(-55), 0)
+	local guest = CharacterRig.createR15(folder, "OriginalMaskedGuest", guestStart, {
+		masked = true,
+		head = Color3.fromRGB(42, 44, 56),
+		torso = Color3.fromRGB(32, 34, 44),
+		arms = Color3.fromRGB(28, 30, 40),
+		legs = Color3.fromRGB(22, 23, 32),
+	})
 
-	local focus = VisualKit.part(
-		folder,
-		"FinaleFocus",
-		Vector3.one,
-		center * CFrame.new(0, 2.5, 0),
-		Color3.new(1, 1, 1),
-		Enum.Material.SmoothPlastic,
-		{ transparency = 1 }
-	)
+	local focus = addShotMarker(folder, "FinaleFocus", center * CFrame.new(0, 2.5, 0))
+	addShotMarker(folder, "ShotWide", center * CFrame.new(0, 2.5, 0))
+	addShotMarker(folder, "ShotDogs", center * CFrame.new(0.1, 1.2, 0.3))
+	addShotMarker(folder, "ShotGuest", guestEnd * CFrame.new(0, 1.2, 0))
+	addShotMarker(folder, "ShotBirthday", center * CFrame.new(0, 2.8, -1))
 	focus.CanQuery = false
+
+	-- Delayed entrance timed to BroodingGuest beat: walk cycle + linear root motion.
+	task.delay(4.4, function()
+		if token ~= runToken or not guest.Parent then
+			return
+		end
+		CharacterRig.walkTo(guest, guestEnd, 3.2, "idle")
+	end)
+	task.delay(8.6, function()
+		if token ~= runToken or not guest.Parent then
+			return
+		end
+		CharacterRig.play(guest, "wave", false, 0.1)
+		task.delay(2.2, function()
+			if token ~= runToken or not guest.Parent then
+				return
+			end
+			CharacterRig.play(guest, "idle", true, 0.2)
+		end)
+	end)
+	task.delay(13.5, function()
+		if token ~= runToken or not guest.Parent then
+			return
+		end
+		CharacterRig.play(guest, "cheer", false, 0.1)
+		DogPuppet.play(gigi, "Idle")
+		DogPuppet.play(rambo, "Idle")
+	end)
+
 	if broadcast then
 		broadcast(
 			"FinaleStarted",
 			{ messageLines = Config.finaleMessage, starName = Config.starName, summary = summary }
 		)
 	end
+	broadcastBeat(token, 0.05, "Establishing")
 	broadcastBeat(token, 0.8, "LightsDimmed")
+	broadcastBeat(token, 2.4, "DogsResting")
 	broadcastBeat(token, 3.5, "Message")
 	broadcastBeat(token, 8.5, "BroodingGuest")
+	broadcastBeat(token, 12, "GuestWave")
 	broadcastBeat(token, 14, "HappyBirthday")
 	task.delay(17.5, function()
 		if token ~= runToken or not finaleWorld or not finaleWorld.Parent then
