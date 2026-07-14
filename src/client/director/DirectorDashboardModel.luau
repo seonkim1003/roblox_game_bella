@@ -1,5 +1,19 @@
 --!strict
 
+local function loadGradePolicy(): any
+	local robloxOk, robloxMod = pcall(function()
+		return (require :: any)(
+			game:GetService("ReplicatedStorage"):WaitForChild("Shared").GradePolicy
+		)
+	end)
+	if robloxOk then
+		return robloxMod
+	end
+	return (require :: any)("../../shared/GradePolicy")
+end
+
+local GradePolicy = loadGradePolicy()
+
 local DirectorDashboardModel = {}
 
 export type MarkerCategory = "Card" | "Moment"
@@ -30,36 +44,16 @@ local CARD_IDS: { [string]: boolean } = {
 	ConfettiFinish = true,
 }
 
-local GRADE_BANDS: { GradeBand } = {
-	{ grade = "D", minimum = 0, maximum = 47 },
-	{ grade = "C", minimum = 48, maximum = 64 },
-	{ grade = "B", minimum = 65, maximum = 79 },
-	{ grade = "A", minimum = 80, maximum = 91 },
-	{ grade = "S", minimum = 92, maximum = 100 },
-}
-
 function DirectorDashboardModel.gradeBands(): { GradeBand }
-	return GRADE_BANDS
+	return GradePolicy.bands()
 end
 
 function DirectorDashboardModel.gradeFor(value: number): string
-	local score = math.clamp(value, 0, 100)
-	for _, band in GRADE_BANDS do
-		if score <= band.maximum then
-			return band.grade
-		end
-	end
-	return "S"
+	return GradePolicy.gradeFromProjected(value)
 end
 
 function DirectorDashboardModel.targetBand(targetGrade: string?): GradeBand
-	local target = targetGrade or "A"
-	for _, band in GRADE_BANDS do
-		if band.grade == target then
-			return band
-		end
-	end
-	return GRADE_BANDS[4]
+	return GradePolicy.targetBand(targetGrade)
 end
 
 function DirectorDashboardModel.markerCategory(markerKind: string?): MarkerCategory?

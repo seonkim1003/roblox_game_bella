@@ -13,6 +13,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
 local Net = require(Shared.Net)
 local ContractValidation = require(Shared.ContractValidation)
+local GradePolicy = require(Shared.GradePolicy)
 local ShowConstants = require(Shared.ShowConstants)
 local TelemetryMock = require(Shared.TelemetryMock)
 local Types = require(Shared.Types)
@@ -76,6 +77,7 @@ local activeRoundConfig: Types.RoundConfig? = nil
 local activeRunToken = 0
 local requestBuckets: { [Player]: { [string]: TokenBucket.Bucket } } = {}
 local lastInputSequence: { [Player]: number } = {}
+local lastActionAt: { [Player]: { [string]: number } } = {}
 local abandonToken = 0
 local lastSignificantMomentAt: number? = nil
 local lastShowrunnerAt = 0
@@ -245,6 +247,7 @@ local function stopActiveMinigame()
 	activeMinigame = nil
 	activeRoundConfig = nil
 	table.clear(lastInputSequence)
+	table.clear(lastActionAt)
 	if not minigame then
 		return
 	end
@@ -266,15 +269,6 @@ local function authoritativeResult(
 		score = 0
 	end
 	score = math.clamp(math.round(score), 0, MAX_SCORE)
-	local grade = if rawResult and type(rawResult.grade) == "string" then rawResult.grade else nil
-	if grade ~= "S" and grade ~= "A" and grade ~= "B" and grade ~= "C" and grade ~= "D" then
-		grade = if score >= 900
-			then "S"
-			elseif score >= 750 then "A"
-			elseif score >= 550 then "B"
-			elseif score >= 300 then "C"
-			else "D"
-	end
 	local metrics: { [string]: number } = {}
 	local rawMetrics = if rawResult and type(rawResult.metrics) == "table"
 		then rawResult.metrics
@@ -291,11 +285,27 @@ local function authoritativeResult(
 			end
 		end
 	end
+
+	local accuracy = if type(metrics.Accuracy) == "number" then metrics.Accuracy else nil
+	local validAttempts = if type(metrics.ValidAttempts) == "number"
+		then math.max(0, math.floor(metrics.ValidAttempts))
+		else 0
+	local perfects = if type(metrics.Perfects) == "number"
+		then math.max(0, math.floor(metrics.Perfects))
+		else 0
+	-- Official grade comes only from GradePolicy (accuracy + attempts). Never from raw score.
+	local grade = GradePolicy.gradeFromAccuracy(
+		if validAttempts > 0 then accuracy else nil,
+		validAttempts,
+		perfects
+	)
+	metrics.ProjectedGrade = GradePolicy.projectedScore(if validAttempts > 0 then accuracy else nil)
+
 	return {
 		roundId = roundConfig.roundId,
 		gameId = roundConfig.gameId,
 		score = score,
-		grade = grade :: string,
+		grade = grade,
 		metrics = metrics,
 	}
 end
@@ -458,6 +468,7 @@ local function launchMinigame(player: Player, id: string)
 	ingressRecoveryPending = false
 	lastIngressNoticeAt = 0
 	table.clear(lastInputSequence)
+	table.clear(lastActionAt)
 
 	broadcast("PhaseChanged", { phase = session.phase })
 	broadcast("PremierePhaseChanged", { phase = session.phase, revision = session.revision })
@@ -1136,18 +1147,36 @@ local function handleRoundIngress(player: Player, envelope: any)
 		end
 		local input = envelope.payload
 		local previousSequence = lastInputSequence[player] or 0
+		local now = workspace:GetServerTimeNow()
 		local valid, reason = ContractValidation.validateRoundInput(
 			input,
 			roundConfig.roundId,
 			previousSequence,
-			workspace:GetServerTimeNow(),
+			now,
 			roundConfig.gameId
 		)
 		if not valid then
 			recordIngressRejection("Input", reason)
 			return
 		end
+		local playerActionTimes = lastActionAt[player]
+		if not playerActionTimes then
+			playerActionTimes = {}
+			lastActionAt[player] = playerActionTimes
+		end
+		local actionKey = if type(input.action) == "string" then input.action else ""
+		local intervalOk, intervalReason = ContractValidation.validateActionInterval(
+			roundConfig.gameId,
+			actionKey,
+			now,
+			playerActionTimes[actionKey]
+		)
+		if not intervalOk then
+			recordIngressRejection("Input", intervalReason)
+			return
+		end
 		lastInputSequence[player] = input.sequence
+		playerActionTimes[actionKey] = now
 		recordIngressAccepted()
 		local handler = activeMinigame.handleInput
 		if handler then
@@ -1266,6 +1295,7 @@ function ShowDirectorService.start()
 	Players.PlayerRemoving:Connect(function(player: Player)
 		requestBuckets[player] = nil
 		lastInputSequence[player] = nil
+		lastActionAt[player] = nil
 	end)
 
 	task.spawn(function()

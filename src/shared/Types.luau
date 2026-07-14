@@ -31,6 +31,7 @@ export type RoundInput = {
 	sequence: number,
 	action: string,
 	value: number?,
+	objectId: number?,
 	clientTime: number,
 }
 

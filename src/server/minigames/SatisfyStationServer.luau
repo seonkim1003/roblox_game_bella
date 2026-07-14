@@ -10,17 +10,16 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Types = require(Shared.Types)
 
 local GameplayHooks = require(script.Parent.lib.GameplayHooks)
+local SatisfyStationRules = require(script.Parent.lib.SatisfyStationRules)
 
 local id: Types.MinigameId = "SatisfyStation"
-local SEGMENT_SECONDS = 55
 
 local difficultyWatch: RBXScriptConnection? = nil
 local completeThread: thread? = nil
 local activeCtx: Types.ShowContext? = nil
 local tracker: GameplayHooks.Tracker = GameplayHooks.newTracker()
+local rules = SatisfyStationRules.newState(0.5, 1)
 local segmentToken = 0
-local resolved = 0
-local traySize = 8
 
 local function stopWatch()
 	if difficultyWatch then
@@ -37,12 +36,24 @@ local function cancelComplete()
 	end
 end
 
+local function syncTracker()
+	tracker.score = rules.score
+	tracker.combo = rules.combo
+	tracker.perfects = rules.perfects
+	tracker.progress = rules.progress
+	tracker.accuracy = rules.accuracy
+	tracker.validAttempts = rules.validAttempts
+	tracker.flow = rules.flow
+	tracker.remainingObjects = math.max(0, rules.traySize - rules.resolved)
+	tracker.completed = rules.completed
+end
+
 local function publishLive()
 	local ctx = activeCtx
 	if not ctx then
 		return
 	end
-	tracker.remainingObjects = math.max(0, traySize - resolved)
+	syncTracker()
 	for _, sample in GameplayHooks.telemetrySamples(tracker, ctx.roundConfig.roundId, id) do
 		ctx.publishTelemetry({
 			roundId = sample.roundId,
@@ -55,15 +66,16 @@ end
 
 local function finishRound(label: string)
 	local ctx = activeCtx
-	if not ctx or tracker.completed then
+	if not ctx or rules.completed then
 		return
 	end
-	tracker.completed = true
-	tracker.progress = 1
+	rules.completed = true
+	rules.progress = 1
+	syncTracker()
 	tracker.remainingObjects = 0
 	ctx.recordMoment({
 		roundId = ctx.roundConfig.roundId,
-		sequence = math.max(1, resolved),
+		sequence = math.max(1, rules.resolved),
 		kind = "Finish",
 		serverTime = workspace:GetServerTimeNow(),
 		value = tracker.score,
@@ -78,19 +90,23 @@ local SatisfyStationServer: Types.MinigameServer = {
 	start = function(_self, ctx)
 		activeCtx = ctx
 		tracker = GameplayHooks.newTracker()
-		resolved = 0
 		local difficulty = ctx.difficulty()
-		traySize = math.floor(6 + math.clamp(difficulty, 0, 1) * 4 + 0.5)
-		tracker.remainingObjects = traySize
+		rules = SatisfyStationRules.newState(difficulty, ctx.roundConfig.seed)
+		syncTracker()
 		stopWatch()
 		cancelComplete()
 
 		local lastDifficulty = difficulty
+		local trayPayload = {}
+		for _, item in rules.items do
+			table.insert(trayPayload, { id = item.id, kind = item.kind })
+		end
 		ctx.broadcast("SatisfyStationBegin", {
 			difficulty = lastDifficulty,
 			roundId = ctx.roundConfig.roundId,
 			seed = ctx.roundConfig.seed,
-			traySize = traySize,
+			traySize = rules.traySize,
+			tray = trayPayload,
 		})
 
 		difficultyWatch = RunService.Heartbeat:Connect(function()
@@ -102,7 +118,7 @@ local SatisfyStationServer: Types.MinigameServer = {
 		end)
 
 		local token = segmentToken
-		completeThread = task.delay(SEGMENT_SECONDS, function()
+		completeThread = task.delay(SatisfyStationRules.SEGMENT_SECONDS, function()
 			completeThread = nil
 			if token ~= segmentToken or activeCtx ~= ctx then
 				return
@@ -122,7 +138,7 @@ local SatisfyStationServer: Types.MinigameServer = {
 
 	handleInput = function(_self, _player: Player, input: Types.RoundInput)
 		local ctx = activeCtx
-		if not ctx or tracker.completed or input.roundId ~= ctx.roundConfig.roundId then
+		if not ctx or rules.completed or input.roundId ~= ctx.roundConfig.roundId then
 			return
 		end
 
@@ -134,19 +150,11 @@ local SatisfyStationServer: Types.MinigameServer = {
 			or input.action == "Peel"
 			or input.action == "Pipe"
 		then
-			local accepted = value >= 0.35
-			if accepted then
-				resolved += 1
-				local perfect = value >= 0.85
-				local points = 5 + tracker.combo * 3 + (if perfect then 4 else 0)
-				tracker.score += points
-				tracker.combo += 1
-				tracker.flow = tracker.flow * 0.7 + value * 0.3
-				tracker.accuracy = tracker.accuracy * 0.7 + value * 0.3
-				tracker.progress = math.clamp(resolved / math.max(traySize, 1), 0, 1)
-				tracker.remainingObjects = math.max(0, traySize - resolved)
-				if perfect then
-					tracker.perfects += 1
+			local objectId = if type(input.objectId) == "number" then input.objectId else nil
+			local accepted, item =
+				SatisfyStationRules.applyAction(rules, input.action, value, objectId)
+			if accepted and item then
+				if value >= SatisfyStationRules.PERFECT_THRESHOLD then
 					ctx.recordMoment({
 						roundId = ctx.roundConfig.roundId,
 						sequence = input.sequence,
@@ -156,14 +164,14 @@ local SatisfyStationServer: Types.MinigameServer = {
 						label = `Perfect {input.action}`,
 					})
 				end
-				if tracker.combo >= 3 then
+				if rules.combo >= 3 then
 					ctx.recordMoment({
 						roundId = ctx.roundConfig.roundId,
 						sequence = input.sequence,
 						kind = "Combo",
 						serverTime = workspace:GetServerTimeNow(),
-						value = tracker.combo,
-						label = `ASMR combo x{tracker.combo}`,
+						value = rules.combo,
+						label = `ASMR combo x{rules.combo}`,
 					})
 				end
 				if
@@ -182,16 +190,18 @@ local SatisfyStationServer: Types.MinigameServer = {
 						label = "Dream Mode flow",
 					})
 				end
-				if resolved >= traySize then
+				if rules.resolved >= rules.traySize then
 					finishRound("Tray cleared")
 					return
 				end
-			else
-				tracker.combo = 0
-				tracker.flow = math.clamp(tracker.flow - 0.05, 0, 1)
 			end
 		elseif input.action == "Complete" then
+			if not SatisfyStationRules.canComplete(rules) then
+				return
+			end
 			finishRound("Station finished")
+			return
+		else
 			return
 		end
 

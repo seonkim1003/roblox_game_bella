@@ -49,6 +49,25 @@ expect(
 	"cross-game action rejected"
 )
 
+local outOfRange = validInput(2)
+outOfRange.value = 1.5
+expect(
+	not ContractValidation.validateRoundInput(outOfRange, "round-1", 1, 100, "CheeseTower"),
+	"value above schema max rejected"
+)
+
+local missingValue = validInput(2)
+missingValue.value = nil
+expect(
+	not ContractValidation.validateRoundInput(missingValue, "round-1", 1, 100, "CheeseTower"),
+	"required Place value rejected when missing"
+)
+
+expect(
+	not ContractValidation.validateActionInterval("DogDash", "Jump", 10.05, 10),
+	"jump frequency limit rejected"
+)
+
 local cyclic: { [string]: any } = {}
 cyclic.self = cyclic
 expect(not ContractValidation.isBoundedPayload(cyclic), "cyclic payload rejected")

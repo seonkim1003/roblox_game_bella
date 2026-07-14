@@ -4,13 +4,28 @@
 -- and exposes applyDirectorEffect to the integrated server dispatch layer.
 -- Kept under minigames/lib so ShowDirectorService folder-loading ignores it.
 
+local function loadGradePolicy(): any
+	local robloxOk, robloxMod = pcall(function()
+		return (require :: any)(
+			game:GetService("ReplicatedStorage"):WaitForChild("Shared").GradePolicy
+		)
+	end)
+	if robloxOk then
+		return robloxMod
+	end
+	return (require :: any)("../../../shared/GradePolicy")
+end
+
+local GradePolicy = loadGradePolicy()
+
 export type Tracker = {
 	score: number,
 	combo: number,
 	perfects: number,
 	rescues: number,
 	progress: number,
-	accuracy: number,
+	accuracy: number?,
+	validAttempts: number,
 	flow: number,
 	instability: number,
 	friendship: number,
@@ -43,7 +58,8 @@ function GameplayHooks.newTracker(): Tracker
 		perfects = 0,
 		rescues = 0,
 		progress = 0,
-		accuracy = 0.8,
+		accuracy = nil,
+		validAttempts = 0,
 		flow = 0.55,
 		instability = 0.3,
 		friendship = 0,
@@ -55,20 +71,11 @@ function GameplayHooks.newTracker(): Tracker
 end
 
 function GameplayHooks.gradeFor(tracker: Tracker): string
-	local accuracy = math.clamp(tracker.accuracy, 0, 1)
-	if accuracy >= 0.92 and tracker.perfects >= 3 then
-		return "S"
-	elseif accuracy >= 0.8 then
-		return "A"
-	elseif accuracy >= 0.65 then
-		return "B"
-	elseif accuracy >= 0.45 then
-		return "C"
-	end
-	return "D"
+	return GradePolicy.gradeFromAccuracy(tracker.accuracy, tracker.validAttempts, tracker.perfects)
 end
 
 function GameplayHooks.result(tracker: Tracker, roundId: string): RoundResult
+	local projected = GradePolicy.projectedScore(tracker.accuracy)
 	return {
 		roundId = roundId,
 		score = math.max(0, math.floor(tracker.score + 0.5)),
@@ -76,12 +83,14 @@ function GameplayHooks.result(tracker: Tracker, roundId: string): RoundResult
 		metrics = {
 			Score = tracker.score,
 			Combo = tracker.combo,
-			Accuracy = tracker.accuracy,
+			Accuracy = if tracker.accuracy ~= nil then tracker.accuracy else 0,
+			ValidAttempts = tracker.validAttempts,
+			Perfects = tracker.perfects,
 			Progress = tracker.progress,
 			Instability = tracker.instability,
 			Flow = tracker.flow,
 			Friendship = tracker.friendship,
-			ProjectedGrade = tracker.accuracy * 100,
+			ProjectedGrade = projected,
 		},
 	}
 end
@@ -105,7 +114,10 @@ function GameplayHooks.applyDirectorEffect(
 	if cardId == "DogAssist" or cardId == "TreatRain" then
 		tracker.friendship = math.clamp(tracker.friendship + 0.08 * strength, 0, 1)
 	elseif cardId == "PerfectZone" or cardId == "DreamModeBoost" then
-		tracker.accuracy = math.clamp(tracker.accuracy + 0.04 * strength, 0, 1)
+		-- Only nudge accuracy after gameplay has established a baseline.
+		if tracker.accuracy ~= nil and tracker.validAttempts > 0 then
+			tracker.accuracy = math.clamp(tracker.accuracy + 0.04 * strength, 0, 1)
+		end
 		tracker.flow = math.clamp(tracker.flow + 0.05 * strength, 0, 1)
 	elseif cardId == "RescueSpotlight" then
 		tracker.instability = math.clamp(tracker.instability - 0.08 * strength, 0, 1)
@@ -132,14 +144,19 @@ function GameplayHooks.telemetrySamples(
 	roundId: string,
 	gameId: string
 ): { TelemetrySample }
+	local projected = GradePolicy.projectedScore(tracker.accuracy)
 	local samples: { TelemetrySample } = {
 		{ roundId = roundId, metric = "Score", value = tracker.score },
 		{ roundId = roundId, metric = "Progress", value = tracker.progress },
-		{ roundId = roundId, metric = "Accuracy", value = tracker.accuracy },
+		{
+			roundId = roundId,
+			metric = "Accuracy",
+			value = if tracker.accuracy ~= nil then tracker.accuracy else 0,
+		},
 		{
 			roundId = roundId,
 			metric = "ProjectedGrade",
-			value = tracker.accuracy * 100,
+			value = projected,
 		},
 		{ roundId = roundId, metric = "Combo", value = tracker.combo },
 	}

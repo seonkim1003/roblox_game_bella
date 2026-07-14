@@ -10,17 +10,17 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Types = require(Shared.Types)
 local Config = require(Shared.Config)
 
+local DogDashRules = require(script.Parent.lib.DogDashRules)
 local GameplayHooks = require(script.Parent.lib.GameplayHooks)
 
 local id: Types.MinigameId = "DogDash"
-local SEGMENT_SECONDS = 50
 
 local difficultyWatch: RBXScriptConnection? = nil
 local completeThread: thread? = nil
 local activeCtx: Types.ShowContext? = nil
 local tracker: GameplayHooks.Tracker = GameplayHooks.newTracker()
+local rules = DogDashRules.newState()
 local segmentToken = 0
-local activeDogIndex = 1
 
 local function stopWatch()
 	if difficultyWatch then
@@ -38,8 +38,19 @@ local function cancelComplete()
 end
 
 local function dogName(): string
-	local dog = Config.dogs[activeDogIndex]
+	local dog = Config.dogs[rules.activeDogIndex]
 	return if dog and type(dog.name) == "string" then dog.name else "Gigi"
+end
+
+local function syncTracker()
+	tracker.score = rules.score
+	tracker.combo = rules.combo
+	tracker.progress = rules.progress
+	tracker.accuracy = rules.accuracy
+	tracker.validAttempts = rules.validAttempts
+	tracker.friendship = rules.friendship
+	tracker.activeDog = dogName()
+	tracker.completed = rules.completed
 end
 
 local function publishLive()
@@ -47,7 +58,7 @@ local function publishLive()
 	if not ctx then
 		return
 	end
-	tracker.activeDog = dogName()
+	syncTracker()
 	for _, sample in GameplayHooks.telemetrySamples(tracker, ctx.roundConfig.roundId, id) do
 		ctx.publishTelemetry({
 			roundId = sample.roundId,
@@ -60,11 +71,12 @@ end
 
 local function finishRound(label: string)
 	local ctx = activeCtx
-	if not ctx or tracker.completed then
+	if not ctx or rules.completed then
 		return
 	end
-	tracker.completed = true
-	tracker.progress = 1
+	rules.completed = true
+	rules.progress = 1
+	syncTracker()
 	ctx.recordMoment({
 		roundId = ctx.roundConfig.roundId,
 		sequence = math.max(1, math.floor(tracker.score)),
@@ -82,8 +94,8 @@ local DogDashServer: Types.MinigameServer = {
 	start = function(_self, ctx)
 		activeCtx = ctx
 		tracker = GameplayHooks.newTracker()
-		activeDogIndex = 1
-		tracker.activeDog = dogName()
+		rules = DogDashRules.newState()
+		syncTracker()
 		stopWatch()
 		cancelComplete()
 
@@ -92,6 +104,7 @@ local DogDashServer: Types.MinigameServer = {
 			difficulty = lastDifficulty,
 			roundId = ctx.roundConfig.roundId,
 			seed = ctx.roundConfig.seed,
+			segmentSeconds = DogDashRules.SEGMENT_SECONDS,
 		})
 
 		difficultyWatch = RunService.Heartbeat:Connect(function()
@@ -103,7 +116,7 @@ local DogDashServer: Types.MinigameServer = {
 		end)
 
 		local token = segmentToken
-		completeThread = task.delay(SEGMENT_SECONDS, function()
+		completeThread = task.delay(DogDashRules.SEGMENT_SECONDS, function()
 			completeThread = nil
 			if token ~= segmentToken or activeCtx ~= ctx then
 				return
@@ -123,49 +136,49 @@ local DogDashServer: Types.MinigameServer = {
 
 	handleInput = function(_self, _player: Player, input: Types.RoundInput)
 		local ctx = activeCtx
-		if not ctx or tracker.completed or input.roundId ~= ctx.roundConfig.roundId then
+		if not ctx or rules.completed or input.roundId ~= ctx.roundConfig.roundId then
 			return
 		end
 
 		local value = if type(input.value) == "number" then input.value else 0
 		if input.action == "SwitchDog" then
-			activeDogIndex = if activeDogIndex == 1 then 2 else 1
-			tracker.activeDog = dogName()
+			if not DogDashRules.applySwitch(rules) then
+				return
+			end
+			syncTracker()
 			ctx.recordMoment({
 				roundId = ctx.roundConfig.roundId,
 				sequence = input.sequence,
 				kind = "Tandem",
 				serverTime = workspace:GetServerTimeNow(),
-				value = activeDogIndex,
+				value = rules.activeDogIndex,
 				label = `Leading {tracker.activeDog}`,
 			})
 		elseif input.action == "Jump" or input.action == "Lunge" or input.action == "Charge" then
-			local success = value >= 0.45
-			if success then
-				tracker.score += 10 + tracker.combo * 2
-				tracker.combo += 1
-				tracker.friendship = math.clamp(tracker.friendship + 0.04, 0, 1)
-				tracker.accuracy = tracker.accuracy * 0.75 + value * 0.25
-				if tracker.combo >= 3 then
-					ctx.recordMoment({
-						roundId = ctx.roundConfig.roundId,
-						sequence = input.sequence,
-						kind = "Combo",
-						serverTime = workspace:GetServerTimeNow(),
-						value = tracker.combo,
-						label = `Treat combo x{tracker.combo}`,
-					})
-				end
-			else
-				tracker.combo = 0
-				tracker.score = math.max(0, tracker.score - 5)
-				tracker.accuracy = tracker.accuracy * 0.85
+			local beforeCombo = rules.combo
+			if not DogDashRules.applySkill(rules, value) then
+				return
 			end
-			tracker.progress = math.clamp(value, tracker.progress, 1)
+			if rules.combo >= 3 and rules.combo > beforeCombo then
+				ctx.recordMoment({
+					roundId = ctx.roundConfig.roundId,
+					sequence = input.sequence,
+					kind = "Combo",
+					serverTime = workspace:GetServerTimeNow(),
+					value = rules.combo,
+					label = `Treat combo x{rules.combo}`,
+				})
+			end
 		elseif input.action == "Route" then
-			tracker.progress = math.clamp(math.max(tracker.progress, value), 0, 1)
+			-- Progress is server-owned; Route remains a validated heartbeat only.
+			DogDashRules.applyRoute(rules, value)
 		elseif input.action == "Complete" then
+			if not DogDashRules.canComplete(rules) then
+				return
+			end
 			finishRound("Dash finished")
+			return
+		else
 			return
 		end
 
