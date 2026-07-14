@@ -152,7 +152,7 @@ function RoleChoiceScreen.show()
 	titleConstraint.MinTextSize = 22
 	titleConstraint.Parent = title
 
-	makeButton(panel, "Host", palette.sky, "Director", 2)
+	makeButton(panel, "Director", palette.sky, "Director", 2)
 	makeButton(panel, "Bella", palette.blush, "Star", 3)
 
 	local status = Instance.new("TextLabel")

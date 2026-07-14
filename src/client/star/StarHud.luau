@@ -10,8 +10,19 @@ local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Config = require(Shared.Config)
+local VisualConfig = require(Shared.VisualConfig)
 
 local SoundKit = require(script.Parent.Parent.juice.SoundKit)
+
+local VC = VisualConfig.palette
+
+-- Non-color-only surprise cues: each carries an icon + word, not just a hue.
+local SURPRISE_CUES: { [string]: { icon: string, label: string } } = {
+	Cake = { icon = "🎂", label = "Cake!" },
+	Balloons = { icon = "🎈", label = "Balloons!" },
+	AsmrBurst = { icon = "✨", label = "ASMR Burst!" },
+	Confetti = { icon = "🎉", label = "Confetti!" },
+}
 
 local StarHud = {}
 StarHud.__index = StarHud
@@ -38,6 +49,8 @@ export type StarHudApi = {
 	setSoftActions: (self: StarHudApi, actions: { SoftAction }, onPress: SoftActionHandler?) -> (),
 	clearSoftActions: (self: StarHudApi) -> (),
 	showSoundCue: (self: StarHudApi, label: string) -> (),
+	setGoal: (self: StarHudApi, fraction: number?, label: string?) -> (),
+	showSummary: (self: StarHudApi, info: { title: string, lines: { string } }) -> (),
 }
 
 local SCORE_BASE = Color3.new(1, 1, 1)
@@ -97,6 +110,10 @@ local function layoutChrome(self: any)
 	if self._scoreLabel then
 		self._scoreLabel.Position = UDim2.new(0.5, 0, 0, top)
 	end
+	if self._meter then
+		-- Sits just under the score box (which is ~48-52px tall).
+		self._meter.Position = UDim2.new(0.5, 0, 0, top + 58)
+	end
 	if self._softBar then
 		self._softBar.Position = UDim2.new(0.5, 0, 1, -(bottom + 12))
 	end
@@ -130,6 +147,15 @@ function StarHud.new(): StarHudApi
 		_cueToken = 0,
 		_cueConn = nil :: RBXScriptConnection?,
 		_insetConn = nil :: RBXScriptConnection?,
+		_meter = nil :: Frame?,
+		_meterFill = nil :: Frame?,
+		_meterLabel = nil :: TextLabel?,
+		_flashLabel = nil :: TextLabel?,
+		_summary = nil :: Frame?,
+		_summaryScale = nil :: UIScale?,
+		_summaryTitle = nil :: TextLabel?,
+		_summaryBody = nil :: TextLabel?,
+		_summaryToken = 0,
 	}, StarHud)
 	return (self :: any) :: StarHudApi
 end
@@ -270,6 +296,122 @@ function StarHud.mount(self: any)
 	cueCorner.CornerRadius = UDim.new(0, 10)
 	cueCorner.Parent = cue
 
+	-- Non-color-only surprise label drawn over the flash (icon + word).
+	local flashLabel = Instance.new("TextLabel")
+	flashLabel.Name = "SurpriseLabel"
+	flashLabel.BackgroundTransparency = 1
+	flashLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+	flashLabel.Position = UDim2.fromScale(0.5, 0.28)
+	flashLabel.Size = UDim2.fromScale(0.8, 0.16)
+	flashLabel.Font = Enum.Font.GothamBlack
+	flashLabel.TextScaled = true
+	flashLabel.TextColor3 = VC.ink
+	flashLabel.TextTransparency = 1
+	flashLabel.Text = ""
+	flashLabel.ZIndex = 1
+	flashLabel.Parent = flash
+	local flashConstraint = Instance.new("UITextSizeConstraint")
+	flashConstraint.MaxTextSize = 44
+	flashConstraint.Parent = flashLabel
+
+	-- Per-game goal meter under the score (hidden until set).
+	local meter = Instance.new("Frame")
+	meter.Name = "GoalMeter"
+	meter.AnchorPoint = Vector2.new(0.5, 0)
+	meter.BackgroundColor3 = VC.plumDeep
+	meter.BackgroundTransparency = 0.3
+	meter.BorderSizePixel = 0
+	meter.Position = UDim2.fromScale(0.5, 0.14)
+	meter.Size = UDim2.fromOffset(240, 20)
+	meter.Visible = false
+	meter.Parent = gui
+	local meterCorner = Instance.new("UICorner")
+	meterCorner.CornerRadius = UDim.new(1, 0)
+	meterCorner.Parent = meter
+	local meterFill = Instance.new("Frame")
+	meterFill.Name = "Fill"
+	meterFill.BackgroundColor3 = VC.sky
+	meterFill.BorderSizePixel = 0
+	meterFill.Size = UDim2.fromScale(0, 1)
+	meterFill.Parent = meter
+	local meterFillCorner = Instance.new("UICorner")
+	meterFillCorner.CornerRadius = UDim.new(1, 0)
+	meterFillCorner.Parent = meterFill
+	local meterLabel = Instance.new("TextLabel")
+	meterLabel.Name = "Label"
+	meterLabel.BackgroundTransparency = 1
+	meterLabel.Size = UDim2.fromScale(1, 1)
+	meterLabel.Font = Enum.Font.GothamBold
+	meterLabel.TextSize = 12
+	meterLabel.TextColor3 = VC.cream
+	meterLabel.TextStrokeTransparency = 0.5
+	meterLabel.Text = ""
+	meterLabel.ZIndex = 2
+	meterLabel.Parent = meter
+
+	-- Gentle end-of-run summary card (cream card, blush accent).
+	local summary = Instance.new("Frame")
+	summary.Name = "SummaryCard"
+	summary.AnchorPoint = Vector2.new(0.5, 0.5)
+	summary.BackgroundColor3 = VC.cream
+	summary.BorderSizePixel = 0
+	summary.Position = UDim2.fromScale(0.5, 0.42)
+	summary.Size = UDim2.fromOffset(340, 190)
+	summary.Visible = false
+	summary.ZIndex = 6
+	summary.Parent = gui
+	local summaryCorner = Instance.new("UICorner")
+	summaryCorner.CornerRadius = UDim.new(0, 16)
+	summaryCorner.Parent = summary
+	local summaryScale = Instance.new("UIScale")
+	summaryScale.Scale = 1
+	summaryScale.Parent = summary
+	local summaryStroke = Instance.new("UIStroke")
+	summaryStroke.Color = VC.blush
+	summaryStroke.Thickness = 2
+	summaryStroke.Transparency = 0.2
+	summaryStroke.Parent = summary
+	local summaryAccent = Instance.new("Frame")
+	summaryAccent.Name = "Accent"
+	summaryAccent.AnchorPoint = Vector2.new(0.5, 0)
+	summaryAccent.BackgroundColor3 = VC.blush
+	summaryAccent.BorderSizePixel = 0
+	summaryAccent.Position = UDim2.fromScale(0.5, 0)
+	summaryAccent.Size = UDim2.new(0.5, 0, 0, 6)
+	summaryAccent.ZIndex = 7
+	summaryAccent.Parent = summary
+	local summaryAccentCorner = Instance.new("UICorner")
+	summaryAccentCorner.CornerRadius = UDim.new(1, 0)
+	summaryAccentCorner.Parent = summaryAccent
+	local summaryTitle = Instance.new("TextLabel")
+	summaryTitle.Name = "Title"
+	summaryTitle.AnchorPoint = Vector2.new(0.5, 0)
+	summaryTitle.BackgroundTransparency = 1
+	summaryTitle.Position = UDim2.fromScale(0.5, 0.14)
+	summaryTitle.Size = UDim2.fromScale(0.86, 0.28)
+	summaryTitle.Font = Enum.Font.GothamBlack
+	summaryTitle.TextScaled = true
+	summaryTitle.TextColor3 = VC.ink
+	summaryTitle.Text = ""
+	summaryTitle.ZIndex = 7
+	summaryTitle.Parent = summary
+	local summaryTitleConstraint = Instance.new("UITextSizeConstraint")
+	summaryTitleConstraint.MaxTextSize = 34
+	summaryTitleConstraint.Parent = summaryTitle
+	local summaryBody = Instance.new("TextLabel")
+	summaryBody.Name = "Body"
+	summaryBody.AnchorPoint = Vector2.new(0.5, 1)
+	summaryBody.BackgroundTransparency = 1
+	summaryBody.Position = UDim2.fromScale(0.5, 0.9)
+	summaryBody.Size = UDim2.fromScale(0.86, 0.5)
+	summaryBody.Font = Enum.Font.GothamMedium
+	summaryBody.TextSize = 20
+	summaryBody.TextColor3 = VC.plum
+	summaryBody.TextWrapped = true
+	summaryBody.Text = ""
+	summaryBody.ZIndex = 7
+	summaryBody.Parent = summary
+
 	self._gui = gui
 	self._scoreLabel = score
 	self._scoreScale = scoreScale
@@ -278,6 +420,14 @@ function StarHud.mount(self: any)
 	self._flash = flash
 	self._softBar = softBar
 	self._cueLabel = cue
+	self._flashLabel = flashLabel
+	self._meter = meter
+	self._meterFill = meterFill
+	self._meterLabel = meterLabel
+	self._summary = summary
+	self._summaryScale = summaryScale
+	self._summaryTitle = summaryTitle
+	self._summaryBody = summaryBody
 
 	layoutChrome(self)
 	pcall(function()
@@ -327,6 +477,14 @@ function StarHud.destroy(self: any)
 	self._softBar = nil
 	self._cueLabel = nil
 	self._softHandler = nil
+	self._meter = nil
+	self._meterFill = nil
+	self._meterLabel = nil
+	self._flashLabel = nil
+	self._summary = nil
+	self._summaryScale = nil
+	self._summaryTitle = nil
+	self._summaryBody = nil
 end
 
 local function punchScore(self: any, mood: ScoreMood)
@@ -445,6 +603,18 @@ function StarHud.flashSurprise(self: any, kind: string)
 		flash.BackgroundColor3 = Config.palette.primary
 	end
 
+	-- Icon + word so surprises aren't distinguishable by hue alone.
+	local cue = SURPRISE_CUES[kind]
+	if self._flashLabel and cue then
+		self._flashLabel.Text = `{cue.icon}  {cue.label}`
+		self._flashLabel.TextTransparency = 0.05
+		TweenService:Create(
+			self._flashLabel,
+			TweenInfo.new(0.85, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ TextTransparency = 1 }
+		):Play()
+	end
+
 	if reducedMotion() then
 		flash.BackgroundTransparency = 0.82
 		TweenService
@@ -501,7 +671,76 @@ function StarHud.setGameplayVisible(self: any, visible: boolean)
 	if self._softBar then
 		self._softBar.Visible = visible and #self._softButtons > 0
 	end
+	if visible then
+		-- A fresh run clears any lingering summary card from the last one.
+		self._summaryToken += 1
+		if self._summary then
+			self._summary.Visible = false
+		end
+	end
 	layoutChrome(self)
+end
+
+-- Show/update the per-game goal meter. Pass nil fraction to hide it.
+function StarHud.setGoal(self: any, fraction: number?, label: string?)
+	local meter = self._meter
+	local fill = self._meterFill
+	local text = self._meterLabel
+	if not meter or not fill or not text then
+		return
+	end
+	if fraction == nil then
+		meter.Visible = false
+		return
+	end
+	meter.Visible = true
+	text.Text = label or ""
+	local clamped = math.clamp(fraction, 0, 1)
+	-- Near-full goes butter (almost there!), otherwise sky.
+	fill.BackgroundColor3 = if clamped >= 0.85 then VC.butter else VC.sky
+	if reducedMotion() then
+		fill.Size = UDim2.fromScale(clamped, 1)
+	else
+		TweenService:Create(
+			fill,
+			TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ Size = UDim2.fromScale(clamped, 1) }
+		):Play()
+	end
+end
+
+-- Gentle end-of-run card. Auto-dismisses; also cleared when gameplay resumes.
+function StarHud.showSummary(self: any, info: { title: string, lines: { string } })
+	local summary = self._summary
+	local scale = self._summaryScale
+	if not summary or not self._summaryTitle or not self._summaryBody then
+		return
+	end
+	self._summaryToken += 1
+	local token = self._summaryToken
+
+	self._summaryTitle.Text = info.title
+	self._summaryBody.Text = table.concat(info.lines, "\n")
+	summary.Visible = true
+
+	if scale then
+		if reducedMotion() then
+			scale.Scale = 1
+		else
+			scale.Scale = 0.8
+			TweenService:Create(
+				scale,
+				TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+				{ Scale = 1 }
+			):Play()
+		end
+	end
+
+	task.delay(5, function()
+		if token == self._summaryToken and summary.Parent then
+			summary.Visible = false
+		end
+	end)
 end
 
 function StarHud.setVisible(self: any, visible: boolean)

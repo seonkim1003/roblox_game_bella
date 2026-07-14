@@ -14,6 +14,7 @@ local Config = require(Shared.Config)
 
 local Logic = require(script.Logic)
 local StarController = require(script.Parent.Parent.star.StarController)
+local Motion = require(script.Parent.Parent.juice.Motion)
 
 local id: Types.MinigameId = "DogDash"
 
@@ -134,7 +135,13 @@ local function updateCamera()
 	end
 	camera.CameraType = Enum.CameraType.Scriptable
 	local look = STAGE_ORIGIN + Vector3.new(0, 2, 8)
-	camera.CFrame = CFrame.new(STAGE_ORIGIN + Vector3.new(0, 14, 28), look)
+	local target = CFrame.new(STAGE_ORIGIN + Vector3.new(0, 14, 28), look)
+	-- Gentle push-in instead of a hard cut, matching Cheese Tower's feel.
+	Motion.tween(
+		camera,
+		TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ CFrame = target }
+	)
 end
 
 local function makeDog(name: string, color: Color3, offsetX: number): Model

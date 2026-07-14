@@ -12,6 +12,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Types = require(Shared.Types)
 local Config = require(Shared.Config)
+local VisualConfig = require(Shared.VisualConfig)
 
 local Squish = require(script.Parent.Squish)
 
@@ -100,17 +101,27 @@ local Feedback: Types.FeedbackApi = {
 		if options and typeof(options.position) == "Vector3" then
 			origin = options.position
 		end
-		local amount = if options and type(options.amount) == "number" then options.amount else 40
+		-- gentle = the finale's softer fall: fewer flakes, slower and calmer drift.
+		local gentle = options ~= nil and options.gentle == true
+		local defaultAmount = if gentle then 24 else 40
+		local amount = if options and type(options.amount) == "number"
+			then options.amount
+			else defaultAmount
 		if reducedMotion() then
 			amount = math.min(amount, 10)
 		end
 
+		-- Pull from the shared palette so confetti matches the UI and 3D set.
+		local palette = VisualConfig.palette
 		local colors = {
-			Config.palette.primary,
-			Config.palette.accent,
-			Color3.fromRGB(255, 220, 120),
-			Color3.fromRGB(170, 255, 190),
+			palette.blush,
+			palette.sky,
+			palette.butter,
+			palette.mint,
 		}
+
+		local driftScale = if gentle then 0.55 else 1
+		local fallTime = if gentle then 2.4 else 1.6
 
 		for i = 1, amount do
 			local flake = Instance.new("Part")
@@ -125,22 +136,26 @@ local Feedback: Types.FeedbackApi = {
 			flake.CFrame = CFrame.new(start)
 			flake.Parent = Workspace
 
-			local drift =
-				Vector3.new(math.random(-10, 10), math.random(-14, -6), math.random(-10, 10))
+			local drift = Vector3.new(
+				math.random(-10, 10) * driftScale,
+				math.random(-14, -6),
+				math.random(-10, 10) * driftScale
+			)
+			local spin = if gentle then 0.4 else 1
+			local duration = if reducedMotion() then 0.7 else fallTime + math.random() * 0.6
 			TweenService:Create(
 				flake,
-				TweenInfo.new(
-					if reducedMotion() then 0.7 else 1.6 + math.random() * 0.6,
-					Enum.EasingStyle.Quad,
-					Enum.EasingDirection.In
-				),
+				TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
 				{
-					CFrame = CFrame.new(start + drift)
-						* CFrame.Angles(math.random(), math.random(), math.random()),
+					CFrame = CFrame.new(start + drift) * CFrame.Angles(
+						math.random() * spin,
+						math.random() * spin,
+						math.random() * spin
+					),
 					Transparency = 1,
 				}
 			):Play()
-			Debris:AddItem(flake, if reducedMotion() then 1.1 else 2.4)
+			Debris:AddItem(flake, if reducedMotion() then 1.1 else fallTime + 0.9)
 		end
 	end,
 

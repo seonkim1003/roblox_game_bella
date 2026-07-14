@@ -40,12 +40,41 @@ local function clearEventListeners()
 	table.clear(eventListeners)
 end
 
+-- Last reported run stats, used to build the end-of-run summary card.
+local lastScore = 0
+local lastCombo = 0
+
+-- Soft target height for the Cheese Tower goal meter (stack as high as you can).
+local CHEESE_TARGET = 12
+
+-- Turn per-game score data into a 0..1 goal fraction + friendly label so the HUD
+-- can show a progress meter. Derived from data each game already sends, so no
+-- minigame edits (or frozen-contract changes) are needed.
+local function deriveGoal(minigameId: string, data: { [string]: any }?): (number?, string?)
+	if not data then
+		return nil, nil
+	end
+	if minigameId == "CheeseTower" and type(data.height) == "number" then
+		return math.clamp(data.height / CHEESE_TARGET, 0, 1), `Stack {math.floor(data.height)}`
+	elseif minigameId == "DogDash" and type(data.progress) == "number" then
+		return data.progress, `Dash {math.floor(data.progress * 100 + 0.5)}%`
+	elseif minigameId == "SatisfyStation" and type(data.progress) == "number" then
+		local label = if type(data.remaining) == "number"
+			then `{math.floor(data.remaining)} left`
+			else `Tray {math.floor(data.progress * 100 + 0.5)}%`
+		return data.progress, label
+	end
+	return nil, nil
+end
+
 local function buildContext(
 	minigameId: string,
 	runId: number?,
 	roundConfig: Types.RoundConfig?
 ): Types.ClientContext
 	clearEventListeners()
+	lastScore = 0
+	lastCombo = 0
 	activeIngress = if roundConfig then RoundIngress.create(roundConfig) else nil
 	if activeIngress then
 		activeIngress.ready()
@@ -93,6 +122,12 @@ local function buildContext(
 				end
 			end
 			hud:setScore(score, detail, mood)
+			lastScore = score
+			if data and type(data.combo) == "number" and data.combo > lastCombo then
+				lastCombo = data.combo
+			end
+			local fraction, goalLabel = deriveGoal(minigameId, data)
+			hud:setGoal(fraction, goalLabel)
 			-- Legacy ScoreUpdate path for Director HUD while A1 ingress also carries telemetry.
 			Net.get(Net.MinigameScore):FireServer({
 				id = minigameId,
@@ -209,7 +244,17 @@ local function stopActive()
 	input:setEnabled(false)
 	hud:clearSoftActions()
 	hud:setHint("")
+	hud:setGoal(nil)
 	hud:setGameplayVisible(false)
+end
+
+-- Gentle wrap-up card when the Director ends a run. Calm, not casino-like.
+local function showRunSummary()
+	local lines = { `Score {math.floor(lastScore)}` }
+	if lastCombo > 1 then
+		table.insert(lines, `Best combo x{lastCombo}`)
+	end
+	hud:showSummary({ title = "Nice run!", lines = lines })
 end
 
 local function startFinalePresenter(payload: { [string]: any }?)
@@ -321,8 +366,13 @@ local function handleShowEvent(event: string, payload: { [string]: any }?)
 
 	if event == "MinigameComplete" or event == "PhaseChanged" then
 		local phase = payload and payload.phase
+		local wasPlaying = activeClient ~= nil
 		if event == "MinigameComplete" or phase == "Hub" or phase == "Finale" then
 			stopActive()
+		end
+		-- Celebrate the run just ended (unless the finale is taking over).
+		if event == "MinigameComplete" and wasPlaying and phase ~= "Finale" then
+			showRunSummary()
 		end
 		-- FinaleStarted owns presentation; leaving Finale tears the presenter down.
 		if type(phase) == "string" and phase ~= "Finale" then

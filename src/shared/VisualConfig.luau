@@ -22,6 +22,18 @@ local VisualConfig = {
 		rain = Color3.fromRGB(74, 100, 126),
 		flame = Color3.fromRGB(255, 190, 92),
 	},
+	-- Typography + shape tokens. New/edited UI should read these instead of
+	-- re-picking fonts and magic-number corner radii inline.
+	fonts = {
+		title = Enum.Font.GothamBlack,
+		heading = Enum.Font.GothamBold,
+		body = Enum.Font.GothamMedium,
+	},
+	radius = {
+		card = 16,
+		chip = 12,
+		pill = 999,
+	},
 	lighting = {
 		hubClockTime = 17.65,
 		hubBrightness = 2.35,

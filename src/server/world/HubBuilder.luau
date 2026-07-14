@@ -4,6 +4,7 @@
 
 local Lighting = game:GetService("Lighting")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -14,6 +15,17 @@ local WorldBudget = require(script.Parent.WorldBudget)
 
 local P = VisualConfig.palette
 local WORLD_NAME = "BirthdayBashWorld"
+
+-- Endless, very gentle glow "breathing" for a neon part + its optional light.
+-- Only light intensity/glow varies (no geometry moves, nothing detaches), which
+-- keeps the lounge feeling alive without the parallax that reduced motion targets.
+local function breatheGlow(part: BasePart, light: PointLight?, period: number, lift: number)
+	local info = TweenInfo.new(period, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+	TweenService:Create(part, info, { Transparency = math.clamp(lift, 0, 1) }):Play()
+	if light then
+		TweenService:Create(light, info, { Brightness = light.Brightness * 1.5 }):Play()
+	end
+end
 
 local HubBuilder = {}
 local world: Folder? = nil
@@ -200,7 +212,8 @@ local function addSideTable(parent: Instance, cf: CFrame, index: number)
 		P.flame,
 		Enum.Material.Neon
 	)
-	VisualKit.pointLight(lamp, P.flame, 0.7, 8)
+	local lampLight = VisualKit.pointLight(lamp, P.flame, 0.7, 8)
+	breatheGlow(lamp, lampLight, 3.6, 0.12)
 end
 
 local function addPlanter(parent: Instance, cf: CFrame, index: number)
@@ -454,9 +467,11 @@ function HubBuilder.start()
 			if index % 3 == 0 then P.blush elseif index % 2 == 0 then P.sky else P.flame,
 			Enum.Material.Neon
 		)
-		if index % 3 == 1 then
-			VisualKit.pointLight(bulb, bulb.Color, 0.45, 7)
-		end
+		local bulbLight = if index % 3 == 1
+			then VisualKit.pointLight(bulb, bulb.Color, 0.45, 7)
+			else nil
+		-- Staggered periods give the string a natural, uneven twinkle.
+		breatheGlow(bulb, bulbLight, 2.1 + (index % 4) * 0.35, 0.16)
 	end
 	addAnchors(folder)
 	PremiereSets.build(folder)
