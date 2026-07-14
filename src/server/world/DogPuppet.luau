@@ -4,7 +4,7 @@
 
 local RunService = game:GetService("RunService")
 
-export type Clip = "Idle" | "Walk" | "Spin" | "Sit" | "Curled"
+export type Clip = "Idle" | "Walk" | "Spin" | "Sit" | "Curled" | "Pounce" | "Tumble" | "Victory"
 
 type Motors = {
 	body: Motor6D,
@@ -143,6 +143,47 @@ local function tickClip(ctrl: Controller, dt: number)
 		setOffset(ctrl, ctrl.motors.legFR, CFrame.Angles(math.rad(45), 0, math.rad(10)))
 		setOffset(ctrl, ctrl.motors.legBL, CFrame.Angles(math.rad(55), 0, 0))
 		setOffset(ctrl, ctrl.motors.legBR, CFrame.Angles(math.rad(55), 0, 0))
+	elseif ctrl.clip == "Pounce" then
+		local spring = math.sin(math.min(t * 18, math.pi))
+		setOffset(
+			ctrl,
+			ctrl.motors.body,
+			CFrame.Angles(math.rad(-28) - spring * 0.12, 0, 0)
+				* CFrame.new(0, 0.15 + spring * 0.35, 0)
+		)
+		setOffset(ctrl, ctrl.motors.head, CFrame.Angles(math.rad(-18), 0, 0))
+		setOffset(ctrl, ctrl.motors.tail, CFrame.Angles(math.rad(-20), math.sin(t * 22) * 0.5, 0))
+		setOffset(ctrl, ctrl.motors.legFL, CFrame.Angles(math.rad(-55), 0, 0))
+		setOffset(ctrl, ctrl.motors.legFR, CFrame.Angles(math.rad(-55), 0, 0))
+		setOffset(ctrl, ctrl.motors.legBL, CFrame.Angles(math.rad(35), 0, 0))
+		setOffset(ctrl, ctrl.motors.legBR, CFrame.Angles(math.rad(35), 0, 0))
+	elseif ctrl.clip == "Tumble" then
+		local roll = t * 14
+		setOffset(
+			ctrl,
+			ctrl.motors.body,
+			CFrame.Angles(roll, math.sin(t * 9) * 0.4, math.cos(t * 7) * 0.35)
+				* CFrame.new(0, 0.2 + math.abs(math.sin(t * 10)) * 0.35, 0)
+		)
+		setOffset(ctrl, ctrl.motors.head, CFrame.Angles(math.rad(20), math.sin(t * 11) * 0.5, 0))
+		setOffset(ctrl, ctrl.motors.tail, CFrame.Angles(0, math.sin(t * 24) * 0.8, 0))
+		setOffset(ctrl, ctrl.motors.legFL, CFrame.Angles(math.sin(t * 16) * 0.9, 0, 0))
+		setOffset(ctrl, ctrl.motors.legFR, CFrame.Angles(math.sin(t * 16 + 1) * 0.9, 0, 0))
+		setOffset(ctrl, ctrl.motors.legBL, CFrame.Angles(math.sin(t * 16 + 2) * 0.9, 0, 0))
+		setOffset(ctrl, ctrl.motors.legBR, CFrame.Angles(math.sin(t * 16 + 3) * 0.9, 0, 0))
+	elseif ctrl.clip == "Victory" then
+		local hop = math.abs(math.sin(t * 8))
+		setOffset(
+			ctrl,
+			ctrl.motors.body,
+			CFrame.Angles(math.rad(-8), 0, math.sin(t * 6) * 0.08) * CFrame.new(0, hop * 0.45, 0)
+		)
+		setOffset(ctrl, ctrl.motors.head, CFrame.Angles(math.rad(-12), math.sin(t * 5) * 0.2, 0))
+		setOffset(ctrl, ctrl.motors.tail, CFrame.Angles(0, math.sin(t * 18) * 0.7, 0))
+		setOffset(ctrl, ctrl.motors.legFL, CFrame.Angles(math.rad(-25) - hop * 0.4, 0, 0))
+		setOffset(ctrl, ctrl.motors.legFR, CFrame.Angles(math.rad(-25) - hop * 0.4, 0, 0))
+		setOffset(ctrl, ctrl.motors.legBL, CFrame.Angles(math.rad(18) + hop * 0.2, 0, 0))
+		setOffset(ctrl, ctrl.motors.legBR, CFrame.Angles(math.rad(18) + hop * 0.2, 0, 0))
 	end
 end
 

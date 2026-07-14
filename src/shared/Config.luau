@@ -1,9 +1,11 @@
 -- Personalization used by the authoritative Premiere flow.
 
+local RunService = game:GetService("RunService")
+
 local Config = {
 	starName = "Bella",
-	directorUserId = 0, -- your Roblox userId (assigns you the Director role)
-	starUserId = 0, -- Bella's Roblox userId (assigns her the Star role)
+	directorUserId = 0, -- Set the real Director Roblox user ID before publishing.
+	starUserId = 0, -- Set Bella's real Roblox user ID before publishing.
 	birthday = "Bella's Birthday Premiere",
 
 	palette = {
@@ -38,5 +40,17 @@ local Config = {
 		hardPlatforming = false,
 	},
 }
+
+local productionRolesLocked = Config.directorUserId > 0
+	and Config.starUserId > 0
+	and Config.directorUserId ~= Config.starUserId
+if not productionRolesLocked then
+	local message = "[Bash] Production role IDs must be non-zero and different in Config.luau"
+	if RunService:IsStudio() then
+		warn(message .. "; Studio role overrides remain enabled for local testing")
+	else
+		error(message, 0)
+	end
+end
 
 return Config

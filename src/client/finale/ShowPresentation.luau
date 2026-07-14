@@ -19,11 +19,14 @@ local started = false
 
 local P = VisualConfig.palette
 local gui: ScreenGui? = nil
+local shadeFrame: Frame? = nil
 local panel: Frame? = nil
 local titleLabel: TextLabel? = nil
 local bodyLabel: TextLabel? = nil
 local summaryLabel: TextLabel? = nil
 local actionRow: Frame? = nil
+local cinematicFight = false
+local panelConstraint: UISizeConstraint? = nil
 
 local GAME_NAMES: { [string]: string } = {
 	CheeseTower = "Cheese Atelier",
@@ -89,7 +92,72 @@ local function setVisible(visible: boolean)
 	end
 end
 
+local function setModalLayout()
+	cinematicFight = false
+	if shadeFrame then
+		shadeFrame.BackgroundTransparency = 0.2
+	end
+	if panel then
+		panel.AnchorPoint = Vector2.new(0.5, 0.5)
+		panel.Position = UDim2.fromScale(0.5, 0.5)
+		panel.BackgroundTransparency = 0
+		panel.Size = UDim2.new(0.88, 0, 0, 290)
+	end
+	if panelConstraint then
+		panelConstraint.MaxSize = Vector2.new(620, 440)
+		panelConstraint.MinSize = Vector2.new(286, 270)
+	end
+	if titleLabel then
+		titleLabel.Position = UDim2.fromOffset(24, 30)
+		titleLabel.Size = UDim2.new(1, -48, 0, 58)
+	end
+	if bodyLabel then
+		bodyLabel.Position = UDim2.fromOffset(24, 96)
+		bodyLabel.Size = UDim2.new(1, -48, 0, 78)
+	end
+	if actionRow then
+		actionRow.Position = UDim2.new(0, 24, 1, -82)
+		actionRow.Size = UDim2.new(1, -48, 0, 58)
+	end
+	if summaryLabel then
+		summaryLabel.Visible = false
+	end
+end
+
+local function setCinematicLayout()
+	cinematicFight = true
+	if shadeFrame then
+		shadeFrame.BackgroundTransparency = 1
+	end
+	if panel then
+		panel.AnchorPoint = Vector2.new(0.5, 1)
+		panel.Position = UDim2.new(0.5, 0, 1, -28)
+		panel.BackgroundTransparency = 0.08
+		panel.Size = UDim2.new(0.72, 0, 0, 148)
+	end
+	if panelConstraint then
+		panelConstraint.MaxSize = Vector2.new(560, 160)
+		panelConstraint.MinSize = Vector2.new(260, 120)
+	end
+	if titleLabel then
+		titleLabel.Position = UDim2.fromOffset(20, 12)
+		titleLabel.Size = UDim2.new(1, -40, 0, 32)
+	end
+	if bodyLabel then
+		bodyLabel.Position = UDim2.fromOffset(20, 44)
+		bodyLabel.Size = UDim2.new(1, -40, 0, 40)
+	end
+	if actionRow then
+		actionRow.Position = UDim2.new(0, 20, 1, -52)
+		actionRow.Size = UDim2.new(1, -40, 0, 40)
+	end
+	if summaryLabel then
+		summaryLabel.Visible = false
+	end
+end
+
 local function present(title: string, body: string)
+	setModalLayout()
 	if titleLabel then
 		titleLabel.Text = title
 	end
@@ -104,6 +172,36 @@ local function present(title: string, body: string)
 		panel.Size = UDim2.new(0.88, 0, 0, 290)
 	end
 	clearActions()
+	setVisible(true)
+end
+
+local function presentFightCaption(title: string, body: string)
+	setCinematicLayout()
+	if titleLabel then
+		titleLabel.Text = title
+	end
+	if bodyLabel then
+		bodyLabel.Text = body
+	end
+	if summaryLabel then
+		summaryLabel.Text = ""
+		summaryLabel.Visible = false
+	end
+	clearActions()
+	button("Skip", P.linen, function()
+		send("SkipCinematic", {})
+	end)
+	setVisible(true)
+end
+
+local function updateFightLine(line: string)
+	if not cinematicFight then
+		presentFightCaption("RAMBO VS GIGI", line)
+		return
+	end
+	if bodyLabel then
+		bodyLabel.Text = line
+	end
 	setVisible(true)
 end
 
@@ -194,9 +292,17 @@ local function presentPhase(phase: string, payload: Payload)
 	if phase == "Invitation" then
 		presentInvitation()
 	elseif phase == "Lounge" or phase == "Minigame" then
+		cinematicFight = false
 		setVisible(false)
 	elseif phase == "ActIntroduction" then
-		local gameId = payload.activeGameId
+		local gameId = payload.activeGameId or payload.gameId
+		if gameId == "DogDash" or payload.dogFight == true then
+			presentFightCaption(
+				"RAMBO VS GIGI",
+				"Play fight in the garden — Gigi's going for gold."
+			)
+			return
+		end
 		local name = if type(gameId) == "string" then GAME_NAMES[gameId] or gameId else "Next Act"
 		present("NEXT ACT", name)
 		button("Skip", P.linen, function()
@@ -213,6 +319,10 @@ local function presentPhase(phase: string, payload: Payload)
 			send("SkipCinematic", {})
 		end)
 	elseif phase == "Interlude" then
+		if payload.dogFight == true or payload.nextGameId == "DogDash" then
+			presentFightCaption("RAMBO VS GIGI", "The pups take the rug. Who comes out on top?")
+			return
+		end
 		present("INTERLUDE", "The set is changing. The next act begins in a few seconds.")
 		button("Next act now", P.sky, function()
 			send("SkipCinematic", {})
@@ -245,6 +355,7 @@ local function build()
 	screen.Parent = playerGui
 
 	local shade = Instance.new("Frame")
+	shade.Name = "Shade"
 	shade.BackgroundColor3 = P.night
 	shade.BackgroundTransparency = 0.2
 	shade.BorderSizePixel = 0
@@ -321,7 +432,9 @@ local function build()
 	layout.Parent = row
 
 	gui = screen
+	shadeFrame = shade
 	panel = card
+	panelConstraint = constraint
 	titleLabel = title
 	bodyLabel = body
 	summaryLabel = summary
@@ -353,6 +466,40 @@ function ShowPresentation.start()
 			local phase = payload.phase
 			if type(phase) == "string" then
 				presentPhase(phase, payload)
+			end
+		elseif message.event == "ActIntroduction" then
+			presentPhase("ActIntroduction", payload)
+		elseif message.event == "InterludeStarted" then
+			presentPhase("Interlude", payload)
+		elseif message.event == "DogFightStarted" then
+			presentFightCaption(
+				"RAMBO VS GIGI",
+				"Play fight in the garden — Gigi's going for gold."
+			)
+		elseif message.event == "DogFightBeat" then
+			local line = payload.line
+			if type(line) == "string" then
+				updateFightLine(line)
+			end
+		elseif message.event == "DogFightEnded" then
+			cinematicFight = false
+			setVisible(false)
+		elseif message.event == "FinaleStarted" then
+			presentFightCaption(
+				"HEADLINER FINALE",
+				"Watch the moment. Confirm skip only if both of you want to move on."
+			)
+			clearActions()
+			button("Confirm skip", P.linen, function()
+				send("SkipCinematic", {})
+			end)
+		elseif message.event == "FinaleSkipConfirmed" then
+			local complete = payload.complete == true
+			if complete then
+				setVisible(false)
+			elseif bodyLabel then
+				bodyLabel.Text = "Waiting for the other player to confirm skip…"
+				setVisible(true)
 			end
 		elseif message.event == "KeepsakeResult" then
 			presentKeepsake(payload, false)

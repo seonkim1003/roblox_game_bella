@@ -15,6 +15,11 @@ Ship a private, polished two-player birthday Premiere:
 - Authoritative server state carries the show from invitation through a personalized finale and keepsake.
 - Reconnects, muted audio, and reduced motion retain usable alternatives.
 
+The playable act order is fixed: `CheeseTower`, `DogDash`, then `SatisfyStation`.
+The Rambo-versus-Gigi DogFight cinematic leads into DogDash. Director controls may
+pace or skip an allowed cinematic transition, but they do not free-launch acts or
+replay a single completed act. Replay is a full-show keepsake action only.
+
 ## Integrated architecture
 
 | Area | Owner | Current contract |
@@ -34,7 +39,19 @@ The A-to-B gameplay seam is integrated: accepted Director cards dispatch into th
 4. Director dashboard with predictions, helpful cue cards, live telemetry, projected grades, graph markers, diagnostics, and Studio Round Lab.
 5. Personalized server-owned performance summary consumed by the finale and keepsake presentation.
 6. Authored Premiere sets, named camera markers, responsive UI tokens, reviewed art manifests, and runtime world-budget auditing.
-7. Automated pure and integration coverage plus a successful strict Luau, Selene, StyLua, Lune, and Rojo build pipeline.
+7. Automated Lune specs cover pure state, ingress, gameplay hooks, finale flow, and
+   DogFight timeline regressions; `scripts/validate.ps1` also runs formatting, lint,
+   type analysis, and a Rojo build. No line or branch coverage percentage is
+   currently collected, so test scope is reported instead of a coverage percentage.
+
+## Authoritative scoring boundary
+
+Clients report bounded action intent through the ingress contract. Minigame servers
+own timers, legal object/action state, progress, scoring, and completion. They reject
+duplicate, out-of-order, impossible, over-frequency, and premature completion input.
+Official results require valid attempts and use the shared grade policy; dashboard
+projections consume that policy but remain advisory and cannot change an official
+score, grade, reward, or show result.
 
 ## Remaining release gates
 
@@ -46,7 +63,9 @@ These are shared acceptance tasks, not unfinished Agent A or Agent B implementat
 4. Disconnect the Director and verify deterministic Showrunner takeover.
 5. Verify reduced motion, muted audio, visual sound cues, and finale controls during a complete run.
 6. Profile target-mobile performance and inspect the world-budget attributes in Studio.
-7. Replace optional safe-default personalization with the final birthday date, Roblox user IDs, personal message, and dog details if the user supplies them.
+7. Add the real Director and Bella Roblox user IDs. The existing name, message, dog
+   details, palette, and guardrails are already personalized; published servers fail
+   closed while either role ID is zero or both IDs are the same.
 8. Publish privately and complete a two-device rehearsal.
 
 ## Error and regression policy

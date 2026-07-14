@@ -31,6 +31,11 @@ local messageLabel: TextLabel? = nil
 local shade: Frame? = nil
 local messageCard: Frame? = nil
 local finaleFolder: Folder? = nil
+local queuedLines: { string } = {}
+local activeSummary: Payload? = nil
+local lineIndex = 0
+local birthdayShown = false
+local ratthewShown = false
 
 local function tween(object: Instance, duration: number, properties: { [string]: any })
 	if AccessibilitySettings.get().reducedMotion then
@@ -56,12 +61,6 @@ local function playSound(name: string, visualLabel: string)
 	end
 end
 
-local function gentleConfetti()
-	if not AccessibilitySettings.get().reducedMotion then
-		Feedback.confetti({ gentle = true })
-	end
-end
-
 local function performanceConfetti(summary: Payload?)
 	if AccessibilitySettings.get().reducedMotion then
 		return
@@ -74,6 +73,48 @@ local function performanceConfetti(summary: Payload?)
 			elseif treatment == "RibbonDrift" then 34
 			else 20,
 	})
+end
+
+local function showLine(text: string, chimeLabel: string)
+	local message = messageLabel
+	if not message then
+		return
+	end
+	message.Text = text
+	message.TextTransparency = 1
+	tween(message, 0.45, { TextTransparency = 0 })
+	playSound("softChime", chimeLabel)
+end
+
+local function advanceMessageLine()
+	if not messageLabel then
+		return
+	end
+	lineIndex += 1
+	if lineIndex <= #queuedLines then
+		showLine(queuedLines[lineIndex], "Message chime")
+		return
+	end
+	if not ratthewShown and activeSummary and type(activeSummary.ratthewCallback) == "string" then
+		ratthewShown = true
+		showLine(activeSummary.ratthewCallback :: string, "Ratthew chime")
+	end
+end
+
+local function showBirthdayCard()
+	if birthdayShown then
+		return
+	end
+	birthdayShown = true
+	local message = messageLabel
+	if not message then
+		return
+	end
+	message.Text = `Happy Birthday, {Config.starName}.`
+	message.TextTransparency = 1
+	tween(message, 0.8, { TextTransparency = 0 })
+	performanceConfetti(activeSummary)
+	playSound("cheer", "Birthday cheer")
 end
 
 local function mount()
@@ -224,6 +265,11 @@ local function begin(lines: { string }, summary: Payload?)
 	active = true
 	generation += 1
 	local token = generation
+	queuedLines = lines
+	activeSummary = summary
+	lineIndex = 0
+	birthdayShown = false
+	ratthewShown = false
 	mount()
 
 	local screen = gui
@@ -244,6 +290,7 @@ local function begin(lines: { string }, summary: Payload?)
 	backdrop.BackgroundTransparency = 1
 	title.TextTransparency = 1
 	message.TextTransparency = 1
+	message.Text = ""
 	card.BackgroundTransparency = 1
 	tween(backdrop, 1.1, { BackgroundTransparency = 0.55 })
 	tween(title, 0.7, { TextTransparency = 0.15 })
@@ -258,39 +305,6 @@ local function begin(lines: { string }, summary: Payload?)
 		end
 		-- Establishing hard cut — no multi-second camera glide.
 		cut("ShotWide", Vector3.new(0, 5.2, 16), 2.2, false)
-	end)
-
-	task.spawn(function()
-		task.wait(2.2)
-		for _, line in lines do
-			if token ~= generation then
-				return
-			end
-			message.Text = line
-			message.TextTransparency = 1
-			tween(message, 0.45, { TextTransparency = 0 })
-			playSound("softChime", "Message chime")
-			task.wait(2.4)
-			tween(message, 0.35, { TextTransparency = 1 })
-			task.wait(0.4)
-		end
-		if token ~= generation then
-			return
-		end
-		if summary and type(summary.ratthewCallback) == "string" then
-			message.Text = summary.ratthewCallback
-			message.TextTransparency = 1
-			tween(message, 0.65, { TextTransparency = 0 })
-			playSound("softChime", "Ratthew chime")
-			task.wait(2.5)
-			tween(message, 0.5, { TextTransparency = 1 })
-			task.wait(0.55)
-		end
-		message.Text = `Happy Birthday, {Config.starName}.`
-		message.TextTransparency = 1
-		tween(message, 0.8, { TextTransparency = 0 })
-		performanceConfetti(summary)
-		playSound("cheer", "Birthday cheer")
 	end)
 end
 
@@ -312,6 +326,30 @@ function FinalePresenter.beat(_self: any, beat: string, _payload: Payload?)
 		cut("ShotDogs", Vector3.new(-2.5, 2.4, 7.5), 0.8, true)
 	elseif beat == "Message" then
 		cut("ShotWide", Vector3.new(-1.5, 4.8, 14), 2.2, false)
+		advanceMessageLine()
+		-- Remaining configured lines drip after the Message beat at a readable pace.
+		local token = generation
+		task.spawn(function()
+			while token == generation and active and lineIndex < #queuedLines do
+				task.wait(2.8)
+				if token ~= generation or not active then
+					return
+				end
+				advanceMessageLine()
+			end
+			if
+				token == generation
+				and active
+				and not ratthewShown
+				and activeSummary
+				and type(activeSummary.ratthewCallback) == "string"
+			then
+				task.wait(2.8)
+				if token == generation and active then
+					advanceMessageLine()
+				end
+			end
+		end)
 	elseif beat == "BroodingGuest" then
 		cut("ShotGuest", Vector3.new(-5.5, 3.2, 7), 1.4, true)
 		playSound("softChime", "Guest reveal chime")
@@ -319,8 +357,9 @@ function FinalePresenter.beat(_self: any, beat: string, _payload: Payload?)
 		cut("ShotGuest", Vector3.new(-3.2, 2.6, 5.5), 1.5, true)
 	elseif beat == "HappyBirthday" then
 		cut("ShotBirthday", Vector3.new(0, 4.8, 13), 2.4, true)
-		gentleConfetti()
-		playSound("cheer", "Birthday cheer")
+		showBirthdayCard()
+	elseif beat == "KeepsakeReady" then
+		FinalePresenter:stop()
 	end
 end
 
@@ -328,6 +367,11 @@ function FinalePresenter.stop(_self: any)
 	generation += 1
 	active = false
 	finaleFolder = nil
+	queuedLines = {}
+	activeSummary = nil
+	lineIndex = 0
+	birthdayShown = false
+	ratthewShown = false
 	CutsceneCamera.stop()
 	if gui then
 		gui:Destroy()

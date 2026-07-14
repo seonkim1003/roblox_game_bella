@@ -337,6 +337,7 @@ local function addAnchors(parent: Instance)
 		Cam_DogDash = Vector3.new(10, 2, -6),
 		Cam_SatisfyStation = Vector3.new(0, 2, 8),
 		Cam_Interlude = Vector3.new(0, 2, -4),
+		Cam_DogFight = Vector3.new(0, 0.8, 0),
 	}
 	for name, position in positions do
 		local anchor = VisualKit.part(
